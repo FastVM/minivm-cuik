@@ -318,6 +318,7 @@ CUIK_API bool cuik_args_to_driver(Cuik_DriverArgs* comp_args, Cuik_Arguments* re
     TOGGLE(ARG_TIME, time);
     TOGGLE(ARG_DEBUG, debug_info);
     TOGGLE(ARG_EMITIR, emit_ir);
+    TOGGLE(ARG_EMITC, emit_c);
     TOGGLE(ARG_EMITDOT, emit_dot);
     TOGGLE(ARG_NOLIBC, nocrt);
 

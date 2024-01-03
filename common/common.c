@@ -22,6 +22,9 @@
 #define LOG_USE_COLOR
 #include "log.c"
 
+#define NL_BUFFER_IMPL
+#include <buffer.h>
+
 #include "perf.h"
 
 uint64_t cuik__page_size = 0;

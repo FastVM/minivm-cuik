@@ -14,6 +14,7 @@ X(SYNTAX,      "xe",       false, "type check only")
 // optimizer
 X(OPTLVL,      "O",        true,  "no optimizations")
 // backend
+X(EMITC,       "emit-c",  false, "print C into stdout")
 X(EMITIR,      "emit-ir",  false, "print IR into stdout")
 X(EMITDOT,     "emit-dot", false, "print graphviz into stdout")
 X(OUTPUT,      "o",        true,  "set the output filepath")

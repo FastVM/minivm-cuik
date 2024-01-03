@@ -1,7 +1,7 @@
 local tally = 0
 local succ  = 0
 
-function test_single(path, args, flags)
+local function test_single(path, args, flags)
     tally = tally + 1
 
     if not os.execute(string.format("cuik tests/collection/%s %s -o tests/collection/foo.exe", path, flags)) then
@@ -19,7 +19,7 @@ function test_single(path, args, flags)
     end
 end
 
-function test(path, args, flags)
+local function test(path, args, flags)
     print("testing "..path.."...")
     test_single(path, args, "")
     test_single(path, args, "-g")

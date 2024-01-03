@@ -154,7 +154,7 @@ local is_exe = false
 local added = {}
 
 -- resolve dependencies
-function walk(name)
+local function walk(name)
 	if added[name] ~= nil then
 		return
 	end
@@ -195,14 +195,14 @@ end
 -- generate ninja files
 ninja = io.open("build.ninja", "wb")
 
-function rule(name, content)
+local function rule(name, content)
 	ninja:write("rule "..name.."\n")
 	for k,v in pairs(content) do
 		ninja:write("  "..k.." = "..v.."\n")
 	end
 end
 
-function command(out, input, cmd, extra_input)
+local function command(out, input, cmd, extra_input)
 	ninja:write("build "..out..": run "..input)
 	if extra_input ~= nil then
 		ninja:write("| "..extra_input.."\n")
@@ -212,7 +212,7 @@ function command(out, input, cmd, extra_input)
 	ninja:write("  cmd = "..cmd:gsub("$in", input):gsub("$out", out).."\n")
 end
 
-function filename(file)
+local function filename(file)
 	return file:match("^.+/(.+)%..+")
 end
 
