@@ -168,8 +168,7 @@ static void apply_func(TB_Function* f, void* arg) {
         } else if (args->emit_ir) {
             tb_pass_print(p);
         } else if (args->emit_c) {
-            const char *c_gen = tb_pass_c_fmt(p, name);
-            printf("%s\n\n", c_gen);
+            printf("%s\n", tb_pass_c_fmt(p));
         } else {
             CUIK_TIMED_BLOCK("codegen") {
                 TB_FunctionOutput* out = tb_pass_codegen(p, &arenas[1], NULL, print_asm);
@@ -339,8 +338,7 @@ static void ld_invoke(BuildStepInfo* info) {
         }
 
         if (args->emit_c) {
-            printf("#include <stdint.h>\n");
-            printf("\n");
+            printf("%s\n", tb_pass_c_prelude(mod));
         }
         
         cuiksched_per_function(s->tp, args->threads, s->ld.cu, mod, args, apply_func);
