@@ -1,4 +1,5 @@
 
+#include <stdio.h>
 
 int fib(int x) {
     if (x < 2) {
@@ -9,5 +10,6 @@ int fib(int x) {
 }
 
 int main() {
-    return fib(40) % 10;
+    printf("%i", fib(35));
+    return 0;
 }

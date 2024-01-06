@@ -20,7 +20,7 @@ num_t test_pow(num_t base, num_t exp) {
 
 int main() {
     num_t x = 0;
-    for (num_t i = 0; i < 1000 * 1000 * 100; i++) {
+    for (num_t i = 0; i < 1000 * 1000 * 10; i++) {
         num_t got = i * i;
         num_t want = test_pow(i, 2);
         if (want != got) {

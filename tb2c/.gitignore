@@ -1,1 +1,3 @@
-out
+*.tmp.c
+*.out
+__pycache__

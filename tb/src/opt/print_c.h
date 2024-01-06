@@ -959,10 +959,6 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 //         }
                 //     }
 
-                //     c_fmt_spaces(ctx);
-     nl_buffer_format(ctx->buf, "");
-
-                //     size_t first = projs[0] && projs[0]->dt.type == TB_CONTROL ? 1 : 0;
                 //     FOREACH_N(i, first, 4) {
                 //         if (projs[i] == NULL) break;
                 //         if (i > first) nl_buffer_format(ctx->buf, ", ");
@@ -1101,7 +1097,7 @@ TB_API char *tb_pass_c_prelude(TB_Module *mod) {
         }
         switch ((int) sym->tag) {
             case TB_SYMBOL_EXTERNAL: {
-                nl_buffer_format(buf, "extern char %s[];\n", sym->name);
+                nl_buffer_format(buf, "extern void %s(void);\n", sym->name);
                 break;
             }
             case TB_SYMBOL_GLOBAL: {
