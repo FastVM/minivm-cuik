@@ -1074,10 +1074,12 @@ void dummy_interp(TB_Passes* p) {
 void tb_pass_optimize(TB_Passes* p) {
     tb_pass_peephole(p);
     tb_pass_sroa(p);
-    tb_pass_peephole(p);
-    tb_pass_mem2reg(p);
-    tb_pass_peephole(p);
-    tb_pass_loop(p);
+    FOREACH_N(i, 0, 8) {
+        tb_pass_peephole(p);
+        tb_pass_mem2reg(p);
+    }
+    // tb_pass_peephole(p);
+    // tb_pass_loop(p);
     tb_pass_peephole(p);
 
     // tb_pass_print(p);
