@@ -397,6 +397,7 @@ static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def) {
             if (def) {
                 nl_buffer_format(ctx->buf, "\nbb%u:;\n", n->gvn);
             } else {
+                nl_hashset_put(&ctx->needed_blocks, n);
                 nl_buffer_format(ctx->buf, "bb%u", n->gvn);
             }
         } else if (n->type == TB_PROJ && n->dt.type == TB_CONTROL) {
@@ -409,6 +410,7 @@ static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def) {
                     }
                 }
             } else {
+                nl_hashset_put(&ctx->needed_blocks, n);
                 nl_buffer_format(ctx->buf, "bb%u", n->gvn);
             }
         } else if (n->type == TB_REGION) {
@@ -422,6 +424,7 @@ static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def) {
                     }
                 }
             } else {
+                nl_hashset_put(&ctx->needed_blocks, n);
                 nl_buffer_format(ctx->buf, "bb%zu", n->gvn);
             }
         } else if (n->type == TB_FLOAT32_CONST) {
@@ -718,7 +721,6 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
         nl_buffer_format(ctx->buf, "goto ");
         c_fmt_ref_to_node(ctx, target, false);
         nl_buffer_format(ctx->buf, ";\n");
-        nl_hashset_put(&ctx->needed_blocks, target);
     } else {
         ctx->inline_depth += 1;
         c_fmt_bb(ctx, target);
@@ -1447,7 +1449,7 @@ TB_API char *tb_pass_c_prelude(TB_Module *mod) {
                 TB_Global *g = (void *) sym;
                 if (g->linkage == TB_LINKAGE_PRIVATE) {
                     nl_buffer_format(buf, "static ");
-                    sym->symbol_id = n_private_syms++;
+                    sym->symbol_id = ++n_private_syms;
                 } else {
                     sym->symbol_id = 0;
                 }
@@ -1564,17 +1566,17 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
 
     ctx.return_block = opt->worklist.items[ctx.cfg.block_count - 1];
 
-    bool first = true;
-    TB_Node* end_bb = NULL;
+    bool first = false;
+    // TB_Node* end_bb = NULL;
     nl_hashset_put(&ctx.needed_blocks, opt->worklist.items[0]);
     while (true) {
         bool any = false;
         FOREACH_N(i, 0, ctx.cfg.block_count) {
-            TB_Node* end = nl_map_get_checked(ctx.cfg.node_to_block, opt->worklist.items[i]).end;
-            if (end == f->root_node) {
-                end_bb = opt->worklist.items[i];
-                continue;
-            }
+            // TB_Node* end = nl_map_get_checked(ctx.cfg.node_to_block, opt->worklist.items[i]).end;
+            // if (end == f->root_node) {
+            //     end_bb = opt->worklist.items[i];
+            //     continue;
+            // }
 
             if (nl_hashset_lookup(&ctx.needed_blocks, opt->worklist.items[i]) & NL_HASHSET_HIGH_BIT) {
                 if (!nl_hashset_put(&ctx.completed_blocks, opt->worklist.items[i])) {
@@ -1596,12 +1598,12 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
         }
     }
 
-    if (nl_hashset_lookup(&ctx.needed_blocks, end_bb) & NL_HASHSET_HIGH_BIT) {
-        c_fmt_ref_to_node(&ctx, end_bb, true);
-        ctx.depth += 1;
-        c_fmt_bb(&ctx, end_bb);
-        ctx.depth -= 1;
-    }
+    // if (nl_hashset_lookup(&ctx.needed_blocks, end_bb) & NL_HASHSET_HIGH_BIT) {
+    //     c_fmt_ref_to_node(&ctx, end_bb, true);
+    //     ctx.depth += 1;
+    //     c_fmt_bb(&ctx, end_bb);
+    //     ctx.depth -= 1;
+    // }
 
     tb_arena_restore(tmp_arena, sp);
     worklist_free(&opt->worklist);
