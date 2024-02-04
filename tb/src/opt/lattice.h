@@ -137,6 +137,10 @@ static Lattice* lattice_from_dt(TB_Passes* p, TB_DataType dt) {
             return lattice_intern(p, (Lattice){ dt.data == TB_FLT_64 ? LATTICE_FLOAT64 : LATTICE_FLOAT32, ._float = { LATTICE_UNKNOWN } });
         }
 
+        case TB_MEMORY: {
+            return p->root_mem;
+        }
+
         case TB_CONTROL: return &CTRL_IN_THE_SKY;
         default: return &BOT_IN_THE_SKY;
     }
@@ -173,7 +177,7 @@ static Lattice* lattice_tuple_from_node(TB_Passes* p, TB_Node* n) {
 // known X ^ unknown => unknown (commutative btw)
 #define TRIFECTA_MEET(a, b) ((a).trifecta == (b).trifecta ? (a).trifecta : LATTICE_UNKNOWN)
 
-#define MASK_UPTO(pos) (~UINT64_C(0) >> (64 - pos))
+#define MASK_UPTO(pos) (UINT64_MAX >> (64 - pos))
 #define BEXTR(src,pos) (((src) >> (pos)) & 1)
 uint64_t tb__sxt(uint64_t src, uint64_t src_bits, uint64_t dst_bits) {
     uint64_t sign_bit = BEXTR(src, src_bits-1);
@@ -198,6 +202,14 @@ static Lattice* lattice_gimme_int(TB_Passes* p, int64_t min, int64_t max) {
 static Lattice* lattice_gimme_uint(TB_Passes* p, uint64_t min, uint64_t max) {
     assert(min <= max);
     return lattice_intern(p, (Lattice){ LATTICE_INT, ._int = { min, max } });
+}
+
+static Lattice* lattice_new_alias(TB_Passes* p) {
+    return lattice_intern(p, (Lattice){ LATTICE_MEM, ._mem = { p->alias_n++ } });
+}
+
+static Lattice* lattice_alias(TB_Passes* p, int alias_idx) {
+    return lattice_intern(p, (Lattice){ LATTICE_MEM, ._mem = { alias_idx } });
 }
 
 static bool l_add_overflow(uint64_t x, uint64_t y, uint64_t mask, uint64_t* out) {

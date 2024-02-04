@@ -54,7 +54,7 @@ struct Cuik_BuildStep {
             Cuik_DriverArgs* args;
             const char* source;
 
-            TB_Arena arena;
+            TB_Arena* arena;
             Cuik_CPP* cpp;
             TranslationUnit* tu;
         } cc;
@@ -70,11 +70,11 @@ struct Cuik_BuildStep {
     };
 };
 
-static TB_Arena* get_ir_arena(void) {
-    static _Thread_local TB_Arena ir_arena[2];
-    if (tb_arena_is_empty(&ir_arena[0])) {
-        tb_arena_create(&ir_arena[0], TB_ARENA_LARGE_CHUNK_SIZE);
-        tb_arena_create(&ir_arena[1], TB_ARENA_LARGE_CHUNK_SIZE);
+static TB_Arena** get_ir_arena(void) {
+    static _Thread_local TB_Arena* ir_arena[2];
+    if (ir_arena[0] == NULL) {
+        ir_arena[0] = tb_arena_create(TB_ARENA_LARGE_CHUNK_SIZE);
+        ir_arena[1] = tb_arena_create(TB_ARENA_LARGE_CHUNK_SIZE);
     }
 
     return ir_arena;
@@ -143,14 +143,14 @@ static void local_opt_func(TB_Function* f, void* arg) {
 
     const char* name = ((TB_Symbol*) f)->name;
     CUIK_TIMED_BLOCK_ARGS("passes", name) {
-        TB_Arena* arenas = get_ir_arena();
-        TB_Passes* p = tb_pass_enter(f, &arenas[0]);
+        TB_Arena** arenas = get_ir_arena();
+        TB_Passes* p = tb_pass_enter(f, arenas[0]);
 
-        assert(args->opt_level >= 1);
+        assert(args->optimize);
         tb_pass_optimize(p);
 
         tb_pass_exit(p);
-        log_debug("%s: IR arena size = %.1f KiB", name, tb_arena_current_size(&arenas[0]) / 1024.0f);
+        log_debug("%s: IR arena size = %.1f KiB", name, tb_arena_current_size(arenas[0]) / 1024.0f);
     }
 }
 
@@ -160,8 +160,8 @@ static void apply_func(TB_Function* f, void* arg) {
 
     const char* name = ((TB_Symbol*) f)->name;
     CUIK_TIMED_BLOCK_ARGS("passes", name) {
-        TB_Arena* arenas = get_ir_arena();
-        TB_Passes* p = tb_pass_enter(f, &arenas[0]);
+        TB_Arena** arenas = get_ir_arena();
+        TB_Passes* p = tb_pass_enter(f, arenas[0]);
 
         if (args->emit_dot) {
             tb_pass_print_dot(p, tb_default_print_callback, stdout);
@@ -171,7 +171,7 @@ static void apply_func(TB_Function* f, void* arg) {
             printf("%s\n", tb_pass_c_fmt(p));
         } else {
             CUIK_TIMED_BLOCK("codegen") {
-                TB_FunctionOutput* out = tb_pass_codegen(p, &arenas[1], NULL, print_asm);
+                TB_FunctionOutput* out = tb_pass_codegen(p, arenas[1], NULL, print_asm);
                 if (print_asm) {
                     tb_output_print_asm(out, stdout);
                     printf("\n\n");
@@ -180,7 +180,7 @@ static void apply_func(TB_Function* f, void* arg) {
         }
 
         tb_pass_exit(p);
-        log_debug("%s: IR arena size = %.1f KiB", name, tb_arena_current_size(&arenas[0]) / 1024.0f);
+        log_debug("%s: IR arena size = %.1f KiB", name, tb_arena_current_size(arenas[0]) / 1024.0f);
     }
 }
 #endif
@@ -204,6 +204,37 @@ static void cc_invoke(BuildStepInfo* restrict info) {
     }
 
     TokenStream* tokens = cuikpp_get_token_stream(cpp);
+    if (args->write_deps) {
+        FILE* file = stdout;
+        if (args->dep_file) {
+            file = fopen(args->dep_file, "wb");
+        }
+
+        Cuik_Path obj_path;
+        if (args->output_name == NULL) {
+            cuik_path_set_ext(&obj_path, args->sources[0], 2, ".o");
+        } else {
+            cuik_path_append2(&obj_path, strlen(args->output_name), args->output_name, 4, ".o");
+        }
+
+        // write depfile
+        Cuik_FileEntry* files = cuikpp_get_files(tokens);
+        size_t file_count = cuikpp_get_file_count(tokens);
+
+        fprintf(file, "%s: ", obj_path.data);
+        for (size_t i = 0; i < file_count; i++) {
+            const char* filename = files[i].filename;
+            if (filename[0] == '$') continue;
+
+            fprintf(file, "\\\n  %s ", filename);
+        }
+        fprintf(file, "\n");
+
+        if (args->dep_file) {
+            fclose(file);
+        }
+    }
+
     if (args->preprocess) {
         cuikpp_dump_tokens(tokens);
         goto done;
@@ -213,9 +244,9 @@ static void cc_invoke(BuildStepInfo* restrict info) {
 
     Cuik_ParseResult result;
     CUIK_TIMED_BLOCK_ARGS("parse", s->cc.source) {
-        tb_arena_create(&s->cc.arena, TB_ARENA_LARGE_CHUNK_SIZE);
+        s->cc.arena = tb_arena_create(TB_ARENA_LARGE_CHUNK_SIZE);
 
-        result = cuikparse_run(args->version, tokens, args->target, &s->cc.arena, false);
+        result = cuikparse_run(args->version, tokens, args->target, s->cc.arena, false);
         s->cc.tu = result.tu;
 
         if (result.error_count > 0) {
@@ -295,7 +326,7 @@ static void cc_invoke(BuildStepInfo* restrict info) {
         }
 
         CUIK_TIMED_BLOCK("Free arena") {
-            tb_arena_destroy(&s->cc.arena);
+            tb_arena_destroy(s->cc.arena);
         }
     }
 
@@ -304,12 +335,6 @@ static void cc_invoke(BuildStepInfo* restrict info) {
     // these are called for early exits
     done: cuikdg_dump_to_file(tokens, stderr);
     done_no_cpp: step_done(s);
-}
-
-static void jit_entry(int fn(int, char**)) {
-    char* argv[] = { "jit", "10" };
-    fn(2, argv);
-    __builtin_trap();
 }
 
 static void ld_invoke(BuildStepInfo* info) {
@@ -329,7 +354,7 @@ static void ld_invoke(BuildStepInfo* info) {
 
 
     CUIK_TIMED_BLOCK("Backend") {
-        if (args->opt_level >= 1) {
+        if (args->optimize) {
             tb_module_prepare_ipo(mod);
 
             do {
@@ -367,74 +392,8 @@ static void ld_invoke(BuildStepInfo* info) {
     }
 
     if (args->run) {
-        // TODO(NeGate): support more platforms with the JIT API
-        #ifdef _WIN32
-        TB_JIT* jit = tb_jit_begin(mod, 0);
-
-        // put every function into the heap
-        int(*entry)(int, char**) = NULL;
-
-        TB_Symbol* sym;
-        for (TB_SymbolIter it = tb_symbol_iter(mod); sym = tb_symbol_iter_next(&it), sym;) {
-            if (sym->tag != TB_SYMBOL_FUNCTION) continue;
-
-            TB_Function* f = (TB_Function*) sym;
-            void* ptr = tb_jit_place_function(jit, f);
-            if (strcmp(tb_symbol_get_name((TB_Symbol*) f), "main") == 0) {
-                entry = ptr;
-            }
-        }
-        assert(entry != NULL);
-
-        TB_CPUContext* cpu = tb_jit_thread_create(jit_entry, entry);
-        tb_jit_thread_resume(jit, cpu, TB_DBG_NONE);
-
-        #if 0
-        tb_jit_breakpoint(jit, entry);
-        if (tb_jit_thread_resume(jit, cpu, TB_DBG_NONE)) {
-            for (int i = 0; i < 10000; i++) {
-                uint8_t* pc = tb_jit_thread_pc(cpu);
-                if (pc == NULL) {
-                    break;
-                }
-
-                printf("=== STEP %p", pc);
-                TB_ResolvedAddr addr = tb_jit_addr2sym(jit, pc);
-                if (addr.base) {
-                    printf(" %s", addr.base->name);
-                    if (addr.offset) {
-                        printf(" + %d", addr.offset);
-                    }
-                }
-                printf(" ===\n");
-
-                // dump next 5 lines
-                for (int j = 0; j < 5; j++) {
-                    printf("  %p: ", pc);
-                    ptrdiff_t delta = tb_print_disassembly_inst(TB_ARCH_X86_64, 16, pc);
-                    if (delta < 0) {
-                        printf("ERROR\n");
-                        pc += 1;
-                    } else {
-                        pc += delta;
-                    }
-                }
-
-                if (!tb_jit_thread_resume(jit, cpu, TB_DBG_LINE)) {
-                    break;
-                }
-
-                tb_jit_thread_dump_stack(jit, cpu);
-            }
-        }
-        #endif
-
-        tb_jit_end(jit);
-        goto done;
-        #else
         fprintf(stderr, "C JIT unsupported here :(\n");
         goto done;
-        #endif
     }
 
     ////////////////////////////////
@@ -470,8 +429,8 @@ static void ld_invoke(BuildStepInfo* info) {
                 FileMap fm = open_file_map(path);
                 tb_linker_append_library(
                     l,
-                    (TB_Slice){ strlen(path), (const uint8_t*) cuik_strdup(path) },
-                    (TB_Slice){ fm.size, fm.data }
+                    (TB_Slice){ (const uint8_t*) cuik_strdup(path), strlen(path) },
+                    (TB_Slice){ fm.data, fm.size }
                 );
             }
 
@@ -498,12 +457,12 @@ static void ld_invoke(BuildStepInfo* info) {
             tb_linker_set_subsystem(l, args->subsystem);
         }
 
-        TB_LinkerMsg m;
+        /*TB_LinkerMsg m;
         while (tb_linker_get_msg(l, &m)) {
             if (m.tag == TB_LINKER_MSG_IMPORT) {
                 // TODO(NeGate): implement this
             }
-        }
+        }*/
 
         TB_ExportBuffer buffer = tb_linker_export(l);
         if (!tb_export_buffer_to_file(buffer, output_path.data)) {
@@ -832,7 +791,7 @@ static void irgen_job(void* arg) {
     TB_Module* mod = task.mod;
 
     CompilationUnit* cu = task.tu->parent;
-    TB_Arena* arena = get_ir_arena();
+    TB_Arena** arenas = get_ir_arena();
 
     for (size_t i = 0; i < task.count; i++) {
         if ((task.stmts[i]->flags & STMT_FLAGS_HAS_IR_BACKING) == 0) {
@@ -842,7 +801,7 @@ static void irgen_job(void* arg) {
         const char* name = task.stmts[i]->decl.name;
         TB_Symbol* s;
         CUIK_TIMED_BLOCK_ARGS("irgen", name) {
-            s = cuikcg_top_level(task.tu, mod, arena, task.stmts[i]);
+            s = cuikcg_top_level(task.tu, mod, arenas[0], task.stmts[i]);
         }
 
         if (s != NULL && s->tag == TB_SYMBOL_FUNCTION) {

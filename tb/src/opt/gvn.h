@@ -79,7 +79,11 @@ static size_t extra_bytes(TB_Node* n) {
         case TB_READ:
         case TB_WRITE:
         case TB_ROOT:
+        case TB_RETURN:
         return 0;
+
+        case TB_SPLITMEM:
+        return sizeof(TB_NodeMemSplit);
 
         case TB_REGION:
         return sizeof(TB_NodeRegion);

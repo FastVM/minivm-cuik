@@ -20,7 +20,7 @@ static void jcc(TB_CGEmitter* restrict e, Cond cc, int label) {
     tb_emit_rel32(e, &e->labels[label], GET_CODE_POS(e) - 4);
 }
 
-static void emit_memory_operand(TB_CGEmitter* restrict e, uint8_t rx, const Val* restrict a) {
+static void emit_memory_operand(TB_CGEmitter* restrict e, uint8_t rx, const Val* a) {
     // Operand encoding
     if (a->type == VAL_GPR || a->type == VAL_XMM) {
         EMIT1(e, mod_rx_rm(MOD_DIRECT, rx, a->reg));
@@ -39,7 +39,7 @@ static void emit_memory_operand(TB_CGEmitter* restrict e, uint8_t rx, const Val*
 
         EMIT1(e, mod_rx_rm(mod, rx, needs_index ? RSP : base));
         if (needs_index) {
-            EMIT1(e, mod_rx_rm(scale, (base & 7) == RSP ? RSP : index, base));
+            EMIT1(e, mod_rx_rm(scale, base == RSP ? RSP : index, base));
         }
 
         if (mod == MOD_INDIRECT_DISP8) {
@@ -317,3 +317,12 @@ static void inst2sse(TB_CGEmitter* restrict e, InstType type, const Val* a, cons
     EMIT1(e, inst->op + (supports_mem_dst ? dir : 0));
     emit_memory_operand(e, rx, b);
 }
+
+static void x86_jmp(TB_CGEmitter* restrict e, Val label) {
+    inst1(e, JMP, &label, TB_X86_TYPE_QWORD);
+}
+
+static void x86_jcc(TB_CGEmitter* restrict e, int cc, Val label) {
+    inst1(e, JO + cc, &label, TB_X86_TYPE_QWORD);
+}
+

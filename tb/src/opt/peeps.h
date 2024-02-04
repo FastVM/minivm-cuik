@@ -6,7 +6,7 @@
 //
 // * Identity: replace a node with it's direct inputs (one step).
 //
-// * SCCP: runs SCCP on a node.
+// * SCCP:     runs SCCP on a node.
 //
 // * GVN:      if a node has some identical copy, it will be replaced with it.
 //
@@ -25,13 +25,13 @@ typedef struct {
 static const NodeVtable vtables[TB_NODE_TYPE_MAX] = {
     // type                 ideal              identity            sccp
     [TB_INTEGER_CONST]  = { NULL,              NULL,               sccp_int         },
-    // root
-    [TB_ROOT]           = { ideal_root,        NULL,               NULL             },
     // memory
     [TB_LOAD]           = { ideal_load,        identity_load,      NULL             },
-    [TB_STORE]          = { ideal_store,       NULL,               NULL             },
-    [TB_MEMSET]         = { ideal_memset,      NULL,               NULL             },
-    [TB_MEMCPY]         = { ideal_memcpy,      NULL,               NULL             },
+    [TB_STORE]          = { ideal_store,       NULL,               sccp_mem         },
+    [TB_MEMSET]         = { ideal_memset,      NULL,               sccp_mem         },
+    [TB_MEMCPY]         = { ideal_memcpy,      NULL,               sccp_mem         },
+    [TB_SPLITMEM]       = { NULL,              NULL,               sccp_split_mem   },
+    [TB_MERGEMEM]       = { ideal_merge_mem,   NULL,               sccp_merge_mem   },
     // ptr values
     [TB_LOCAL]          = { NULL,              NULL,               sccp_ptr_vals    },
     [TB_SYMBOL]         = { NULL,              NULL,               sccp_ptr_vals    },
@@ -75,7 +75,7 @@ static const NodeVtable vtables[TB_NODE_TYPE_MAX] = {
     [TB_SELECT]         = { ideal_select,      NULL,               sccp_meetchads   },
     [TB_PHI]            = { ideal_phi,         identity_phi,       sccp_meetchads   },
     // control flow
-    [TB_REGION]         = { ideal_region,      identity_region,    sccp_meetchads   },
+    [TB_REGION]         = { ideal_region,      identity_region,    sccp_region      },
     [TB_BRANCH]         = { ideal_branch,      NULL,               sccp_branch      },
     [TB_SAFEPOINT_POLL] = { NULL,              identity_safepoint, sccp_ctrl        },
     [TB_CALL]           = { ideal_libcall,     identity_ctrl,      sccp_call        },

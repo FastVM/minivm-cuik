@@ -131,8 +131,39 @@ static ParseResult parse_decl(Cuik_Parser* restrict parser, TokenStream* restric
     Cuik_Attribute* attribute_list = parse_attributes(parser, s, NULL);
     SourceLoc loc = tokens_get_location(s);
 
-    // must be a declaration since it's a top level statement
     Attribs attr = { 0 };
+    for (;;) {
+        if (tokens_get(s)->type != TOKEN_KW_declspec &&
+            tokens_get(s)->type != TOKEN_KW_Pragma) {
+            break;
+        }
+
+        tokens_next(s);
+
+        SourceLoc opening_loc = tokens_get_location(s);
+        expect_char(s, '(');
+
+        if (tokens_match(s, sizeof("noreturn")-1, "noreturn")) {
+            attr.is_noret = true;
+            tokens_next(s);
+
+            expect_closing_paren(s, opening_loc);
+        } else {
+            // TODO(NeGate): Correctly parse declspec instead of
+            // ignoring them.
+            int depth = 1;
+            while (depth) {
+                if (tokens_get(s)->type == '(')
+                    depth++;
+                else if (tokens_get(s)->type == ')')
+                    depth--;
+
+                tokens_next(s);
+            }
+        }
+    }
+
+    // must be a declaration since it's a top level statement
     Cuik_QualType type = parse_declspec2(parser, s, &attr);
     if (CUIK_QUAL_TYPE_IS_NULL(type)) {
         diag_err(s, (SourceRange){ loc, tokens_get_last_location(s) }, "could not parse base type.");
@@ -508,7 +539,7 @@ Cuik_ParseResult cuikparse_run(Cuik_Version version, TokenStream* restrict s, Cu
         // check if any previous placeholders are still placeholders
         for (Cuik_Type* type = parser.first_placeholder; type != NULL; type = type->placeholder.next) {
             if (type->kind == KIND_PLACEHOLDER) {
-                diag_err(s, type->loc, "could not find type '%s'!", type->placeholder.name);
+                diag_err(s, type->loc, "you asked for a type %s but didn't declare it.", type->placeholder.name);
             }
         }
 
@@ -517,10 +548,17 @@ Cuik_ParseResult cuikparse_run(Cuik_Version version, TokenStream* restrict s, Cu
         // parse all global declarations (we're walking the arena because it's
         // faster than walking the hash map, cache locality amirite)
         _Static_assert(sizeof(Symbol) == ((sizeof(Symbol) + 15ull) & ~15ull), "needs to be 16byte aligned to be walked in the arena easily");
-        TB_ARENA_FOR(chunk, &parser.symbols->globals_arena) {
-            size_t count = (parser.symbols->globals_arena.chunk_size - sizeof(TB_ArenaChunk)) / sizeof(Symbol);
-            Symbol* syms = (Symbol*) chunk->data;
 
+        TB_ArenaChunk* base = parser.symbols->globals_arena->base;
+        size_t chunk_size = parser.symbols->globals_arena->chunk_size;
+        TB_ARENA_FOR(chunk, parser.symbols->globals_arena) {
+            Symbol* syms = (Symbol*) &chunk->data[chunk == base ? sizeof(TB_Arena) : 0];
+            Symbol* end_syms = (Symbol*) &chunk->data[chunk_size];
+            if (chunk->next == NULL) {
+                end_syms = (Symbol*) parser.symbols->globals_arena->watermark;
+            }
+
+            size_t count = end_syms - syms;
             for (size_t i = 0; i < count; i++) {
                 Symbol* restrict sym = &syms[i];
                 if (sym->token_start == 0 || (sym->storage_class != STORAGE_STATIC_VAR && sym->storage_class != STORAGE_GLOBAL)) {
@@ -539,7 +577,7 @@ Cuik_ParseResult cuikparse_run(Cuik_Version version, TokenStream* restrict s, Cu
                 } else {
                     parse_assignment(&parser, &mini_lex);
                     if (mini_lex.list.current != sym->token_end) {
-                        diag_err(&mini_lex, tokens_get_range(&mini_lex), "Failed to parse expression");
+                        diag_err(&mini_lex, tokens_get_range(&mini_lex), "failed to parse expression");
                     }
                 }
 

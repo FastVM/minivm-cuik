@@ -13,7 +13,7 @@ TB_API TB_Trace tb_inst_get_trace(TB_Function* f) { return f->trace; }
 TB_Node* tb_inst_get_control(TB_Function* f) { return f->trace.bot_ctrl; }
 TB_API TB_Node* tb_inst_root_node(TB_Function* f) { return f->root_node; }
 
-TB_Node* transfer_ctrl(TB_Function* f, TB_Node* n) {
+static TB_Node* transfer_ctrl(TB_Function* f, TB_Node* n) {
     TB_Node* prev = f->trace.bot_ctrl;
     f->trace.bot_ctrl = n;
     if (f->line_loc) {
@@ -23,10 +23,16 @@ TB_Node* transfer_ctrl(TB_Function* f, TB_Node* n) {
 }
 
 void tb_inst_set_control(TB_Function* f, TB_Node* control) {
-    assert(control->type == TB_REGION);
-    f->trace.top_ctrl = control;
-    f->trace.bot_ctrl = control;
-    f->trace.mem = TB_NODE_GET_EXTRA_T(control, TB_NodeRegion)->mem_in;
+    if (control == NULL) {
+        f->trace.top_ctrl = NULL;
+        f->trace.bot_ctrl = NULL;
+        f->trace.mem = NULL;
+    } else {
+        assert(control->type == TB_REGION);
+        f->trace.top_ctrl = control;
+        f->trace.bot_ctrl = control;
+        f->trace.mem = TB_NODE_GET_EXTRA_T(control, TB_NodeRegion)->mem_in;
+    }
 }
 
 TB_Node* tb_inst_region_mem_in(TB_Function* f, TB_Node* region) {
@@ -39,7 +45,7 @@ TB_Trace tb_inst_trace_from_region(TB_Function* f, TB_Node* region) {
     return (TB_Trace){ region, region, r->mem_in };
 }
 
-static TB_Node* get_callgraph(TB_Function* f) { return f->root_node->inputs[3]; }
+static TB_Node* get_callgraph(TB_Function* f) { return f->root_node->inputs[0]; }
 static TB_Node* peek_mem(TB_Function* f) { return f->trace.mem; }
 
 // adds memory effect to region
@@ -138,7 +144,7 @@ static TB_Node* tb_bin_arith(TB_Function* f, int type, TB_ArithmeticBehavior ari
     set_input(f, n, a, 1);
     set_input(f, n, b, 2);
     TB_NODE_SET_EXTRA(n, TB_NodeBinopInt, .ab = arith_behavior);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 static TB_Node* tb_bin_farith(TB_Function* f, int type, TB_Node* a, TB_Node* b) {
@@ -147,13 +153,13 @@ static TB_Node* tb_bin_farith(TB_Function* f, int type, TB_Node* a, TB_Node* b) 
     TB_Node* n = tb_alloc_node(f, type, a->dt, 3, 0);
     set_input(f, n, a, 1);
     set_input(f, n, b, 2);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 static TB_Node* tb_unary(TB_Function* f, int type, TB_DataType dt, TB_Node* src) {
     TB_Node* n = tb_alloc_node(f, type, dt, 2, 0);
     set_input(f, n, src, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_trunc(TB_Function* f, TB_Node* src, TB_DataType dt) {
@@ -240,7 +246,8 @@ void tb_get_data_type_size(TB_Module* mod, TB_DataType dt, size_t* size, size_t*
 void tb_inst_unreachable(TB_Function* f) {
     TB_Node* n = tb_alloc_node(f, TB_UNREACHABLE, TB_TYPE_CONTROL, 1, 0);
     set_input(f, n, transfer_ctrl(f, n), 0);
-    tb_inst_ret(f, 0, NULL);
+    add_input_late(f, f->root_node, n);
+    f->trace.bot_ctrl = NULL;
 }
 
 void tb_inst_debugbreak(TB_Function* f) {
@@ -251,7 +258,8 @@ void tb_inst_debugbreak(TB_Function* f) {
 void tb_inst_trap(TB_Function* f) {
     TB_Node* n = tb_alloc_node(f, TB_TRAP, TB_TYPE_CONTROL, 1, 0);
     set_input(f, n, transfer_ctrl(f, n), 0);
-    tb_inst_ret(f, 0, NULL);
+    add_input_late(f, f->root_node, n);
+    f->trace.bot_ctrl = NULL;
 }
 
 TB_Node* tb_inst_local(TB_Function* f, TB_CharUnits size, TB_CharUnits alignment) {
@@ -262,7 +270,7 @@ TB_Node* tb_inst_local(TB_Function* f, TB_CharUnits size, TB_CharUnits alignment
     TB_Node* n = tb_alloc_node(f, TB_LOCAL, TB_TYPE_PTR, 1, sizeof(TB_NodeLocal));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeLocal, .size = size, .align = alignment);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 void tb_inst_safepoint_poll(TB_Function* f, void* tag, TB_Node* addr, int input_count, TB_Node** inputs) {
@@ -292,7 +300,7 @@ TB_Node* tb_inst_load(TB_Function* f, TB_DataType dt, TB_Node* addr, TB_CharUnit
         set_input(f, n, peek_mem(f), 1);
         set_input(f, n, addr, 2);
         TB_NODE_SET_EXTRA(n, TB_NodeMemAccess, .align = alignment);
-        return n;
+        return tb_pass_gvn_node(f, n);
     }
 }
 
@@ -346,7 +354,7 @@ TB_Node* tb_inst_bool(TB_Function* f, bool imm) {
     TB_Node* n = tb_alloc_node(f, TB_INTEGER_CONST, TB_TYPE_BOOL, 1, sizeof(TB_NodeInt));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeInt, .value = imm);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_uint(TB_Function* f, TB_DataType dt, uint64_t imm) {
@@ -360,7 +368,7 @@ TB_Node* tb_inst_uint(TB_Function* f, TB_DataType dt, uint64_t imm) {
     TB_Node* n = tb_alloc_node(f, TB_INTEGER_CONST, dt, 1, sizeof(TB_NodeInt));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeInt, .value = imm);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_sint(TB_Function* f, TB_DataType dt, int64_t imm) {
@@ -369,21 +377,21 @@ TB_Node* tb_inst_sint(TB_Function* f, TB_DataType dt, int64_t imm) {
     TB_Node* n = tb_alloc_node(f, TB_INTEGER_CONST, dt, 1, sizeof(TB_NodeInt));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeInt, .value = imm);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_float32(TB_Function* f, float imm) {
     TB_Node* n = tb_alloc_node(f, TB_FLOAT32_CONST, TB_TYPE_F32, 1, sizeof(TB_NodeFloat32));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeFloat32, .value = imm);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_float64(TB_Function* f, double imm) {
     TB_Node* n = tb_alloc_node(f, TB_FLOAT64_CONST, TB_TYPE_F64, 1, sizeof(TB_NodeFloat64));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeFloat64, .value = imm);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_string(TB_Function* f, size_t len, const char* str) {
@@ -405,7 +413,7 @@ TB_Node* tb_inst_array_access(TB_Function* f, TB_Node* base, TB_Node* index, int
     set_input(f, n, base, 1);
     set_input(f, n, index, 2);
     TB_NODE_SET_EXTRA(n, TB_NodeArray, .stride = stride);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_member_access(TB_Function* f, TB_Node* base, int64_t offset) {
@@ -416,7 +424,7 @@ TB_Node* tb_inst_member_access(TB_Function* f, TB_Node* base, int64_t offset) {
     TB_Node* n = tb_alloc_node(f, TB_MEMBER_ACCESS, TB_TYPE_PTR, 2, sizeof(TB_NodeMember));
     set_input(f, n, base, 1);
     TB_NODE_SET_EXTRA(n, TB_NodeMember, .offset = offset);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_get_symbol_address(TB_Function* f, TB_Symbol* target) {
@@ -425,7 +433,7 @@ TB_Node* tb_inst_get_symbol_address(TB_Function* f, TB_Symbol* target) {
     TB_Node* n = tb_alloc_node(f, TB_SYMBOL, TB_TYPE_PTR, 1, sizeof(TB_NodeSymbol));
     set_input(f, n, f->root_node, 0);
     TB_NODE_SET_EXTRA(n, TB_NodeSymbol, .sym = target);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_syscall(TB_Function* f, TB_DataType dt, TB_Node* syscall_num, size_t param_count, TB_Node** params) {
@@ -512,46 +520,46 @@ void tb_inst_tailcall(TB_Function* f, TB_FunctionPrototype* proto, TB_Node* targ
     c->proto = proto;
 
     add_input_late(f, get_callgraph(f), n);
-    tb_inst_ret(f, 0, NULL);
+    add_input_late(f, f->root_node, n);
 }
 
 TB_Node* tb_inst_poison(TB_Function* f, TB_DataType dt) {
     TB_Node* n = tb_alloc_node(f, TB_POISON, dt, 1, 0);
     set_input(f, n, f->root_node, 0);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_not(TB_Function* f, TB_Node* src) {
     TB_Node* n = tb_alloc_node(f, TB_NOT, src->dt, 2, 0);
     set_input(f, n, src, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_bswap(TB_Function* f, TB_Node* src) {
     TB_Node* n = tb_alloc_node(f, TB_BSWAP, src->dt, 2, 0);
     set_input(f, n, src, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_clz(TB_Function* f, TB_Node* src) {
     assert(TB_IS_INTEGER_TYPE(src->dt));
     TB_Node* n = tb_alloc_node(f, TB_CLZ, TB_TYPE_I32, 2, 0);
     set_input(f, n, src, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_ctz(TB_Function* f, TB_Node* src) {
     assert(TB_IS_INTEGER_TYPE(src->dt));
     TB_Node* n = tb_alloc_node(f, TB_CTZ, TB_TYPE_I32, 2, 0);
     set_input(f, n, src, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_popcount(TB_Function* f, TB_Node* src) {
     assert(TB_IS_INTEGER_TYPE(src->dt));
     TB_Node* n = tb_alloc_node(f, TB_POPCNT, TB_TYPE_I32, 2, 0);
     set_input(f, n, src, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_neg(TB_Function* f, TB_Node* src) {
@@ -581,7 +589,7 @@ TB_Node* tb_inst_select(TB_Function* f, TB_Node* cond, TB_Node* a, TB_Node* b) {
     set_input(f, n, cond, 1);
     set_input(f, n, a, 2);
     set_input(f, n, b, 3);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_and(TB_Function* f, TB_Node* a, TB_Node* b) {
@@ -748,7 +756,7 @@ TB_Node* tb_inst_va_start(TB_Function* f, TB_Node* a) {
 
     TB_Node* n = tb_alloc_node(f, TB_VA_START, TB_TYPE_PTR, 2, 0);
     set_input(f, n, a, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_x86_ldmxcsr(TB_Function* f, TB_Node* a) {
@@ -756,26 +764,26 @@ TB_Node* tb_inst_x86_ldmxcsr(TB_Function* f, TB_Node* a) {
 
     TB_Node* n = tb_alloc_node(f, TB_X86INTRIN_LDMXCSR, TB_TYPE_I32, 2, 0);
     set_input(f, n, a, 1);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_cycle_counter(TB_Function* f) {
     TB_Node* n = tb_alloc_node(f, TB_CYCLE_COUNTER, TB_TYPE_I64, 1, 0);
     set_input(f, n, f->trace.bot_ctrl, 0);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_prefetch(TB_Function* f, TB_Node* addr, int level) {
     TB_Node* n = tb_alloc_node(f, TB_PREFETCH, TB_TYPE_MEMORY, 2, sizeof(TB_NodePrefetch));
     set_input(f, n, addr, 1);
     TB_NODE_SET_EXTRA(n, TB_NodePrefetch, .level = level);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_x86_stmxcsr(TB_Function* f) {
     TB_Node* n = tb_alloc_node(f, TB_X86INTRIN_STMXCSR, TB_TYPE_I32, 1, 0);
     set_input(f, n, f->trace.bot_ctrl, 0);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_x86_sqrt(TB_Function* f, TB_Node* a) {
@@ -793,7 +801,7 @@ TB_Node* tb_inst_cmp(TB_Function* f, TB_NodeType type, TB_Node* a, TB_Node* b) {
     set_input(f, n, a, 1);
     set_input(f, n, b, 2);
     TB_NODE_SET_EXTRA(n, TB_NodeCompare, .cmp_dt = a->dt);
-    return n;
+    return tb_pass_gvn_node(f, n);
 }
 
 TB_Node* tb_inst_cmp_eq(TB_Function* f, TB_Node* a, TB_Node* b) {
@@ -897,7 +905,7 @@ void tb_inst_set_region_name(TB_Function* f, TB_Node* n, ptrdiff_t len, const ch
 
 // this has to move things which is not nice...
 static void add_input_late(TB_Function* f, TB_Node* n, TB_Node* in) {
-    assert(n->type == TB_REGION || n->type == TB_PHI || n->type == TB_CALLGRAPH);
+    assert(n->type == TB_REGION || n->type == TB_PHI || n->type == TB_ROOT || n->type == TB_CALLGRAPH);
 
     if (n->input_count >= n->input_cap) {
         size_t new_cap = n->input_count * 2;
@@ -1000,28 +1008,30 @@ void tb_inst_ret(TB_Function* f, size_t count, TB_Node** values) {
     TB_Node* mem_state = peek_mem(f);
 
     // allocate return node
-    TB_Node* root = f->root_node;
-    TB_Node* ctrl = root->inputs[0];
+    TB_Node* ret = f->ret_node;
+    TB_Node* ctrl = ret->inputs[0];
     assert(ctrl->type == TB_REGION);
 
     // add to PHIs
-    assert(root->input_count >= 4 + count);
-    add_input_late(f, root->inputs[1], mem_state);
+    assert(ret->input_count >= 3 + count);
+    add_input_late(f, ret->inputs[1], mem_state);
 
-    size_t i = 4;
-    for (; i < count + 4; i++) {
-        assert(root->inputs[i]->dt.raw == values[i - 4]->dt.raw && "datatype mismatch");
-        add_input_late(f, root->inputs[i], values[i - 4]);
+    size_t i = 3;
+    for (; i < count + 3; i++) {
+        assert(ret->inputs[i]->dt.raw == values[i - 3]->dt.raw && "datatype mismatch");
+        add_input_late(f, ret->inputs[i], values[i - 3]);
     }
 
-    size_t phi_count = root->input_count;
+    size_t phi_count = ret->input_count;
     for (; i < phi_count; i++) {
         // put poison in the leftovers?
         log_warn("%s: ir: generated poison due to inconsistent number of returned values", f->super.name);
 
-        TB_Node* poison = tb_alloc_node(f, TB_POISON, root->inputs[i]->dt, 1, 0);
-        set_input(f, poison, f->root_node, 0);
-        add_input_late(f, root->inputs[i], poison);
+        TB_Node* poison = tb_alloc_node(f, TB_POISON, ret->inputs[i]->dt, 1, 0);
+        set_input(f, poison, f->ret_node, 0);
+
+        poison = tb__gvn(f, poison, 0);
+        add_input_late(f, ret->inputs[i], poison);
     }
 
     // basically just tb_inst_goto without the memory PHI (we did it earlier)

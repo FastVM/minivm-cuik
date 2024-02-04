@@ -265,6 +265,10 @@ TB_Node* cvt2rval(TranslationUnit* tu, TB_Function* func, IRVal* v) {
             reg = tb_inst_phi2(func, v->phi.merger, one, zero);
             break;
         }
+        case LVALUE_SYM: {
+            reg = tb_inst_get_symbol_address(func, v->sym->backing.s);
+            break;
+        }
         case LVALUE: {
             // Implicit array to pointer
             if (src->kind == KIND_ARRAY || src->kind == KIND_FUNC) {
@@ -706,8 +710,8 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
 
                 assert(stmt->backing.s != NULL);
                 return (IRVal){
-                    .value_type = LVALUE,
-                    .reg = tb_inst_get_symbol_address(func, stmt->backing.s),
+                    .value_type = LVALUE_SYM,
+                    .sym = stmt,
                 };
             } else {
                 return (IRVal){
@@ -870,6 +874,11 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
             tls_restore(ir_args);
 
             if (out.count == 0) {
+                // noreturn
+                if (args[0].value_type == LVALUE_SYM && args[0].sym->decl.attrs.is_noret) {
+                    tb_inst_unreachable(func);
+                }
+
                 return (IRVal){
                     .value_type = RVALUE,
                     .reg = NULL,
@@ -904,8 +913,14 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
         case EXPR_ADDR: {
             IRVal src = GET_ARG(0);
 
-            assert(src.value_type == LVALUE);
-            src.value_type = RVALUE;
+            if (src.value_type == LVALUE) {
+                src.value_type = RVALUE;
+            } else if (src.value_type == LVALUE_SYM) {
+                src.value_type = RVALUE;
+                src.reg = tb_inst_get_symbol_address(func, src.sym->backing.s);
+            } else {
+                assert(0);
+            }
             return src;
         }
         case EXPR_CAST: {
@@ -1171,6 +1186,10 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
             bool is_volatile = CUIK_QUAL_TYPE_HAS(GET_TYPE(), CUIK_QUAL_VOLATILE);
 
             IRVal address = GET_ARG(0);
+            if (address.value_type == LVALUE_SYM) {
+                address.value_type = LVALUE;
+                address.reg = tb_inst_get_symbol_address(func, address.sym->backing.s);
+            }
             assert(address.value_type == LVALUE && "unsupported increment/decrement value");
 
             TB_DataType dt = ctype_to_tbtype(type);
@@ -1243,10 +1262,15 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
             Cuik_Type* type = cuik_canonical_type(GET_TYPE());
             bool is_volatile = CUIK_QUAL_TYPE_HAS(GET_TYPE(), CUIK_QUAL_VOLATILE);
 
+            IRVal lhs = GET_ARG(0);
+            if (lhs.value_type == LVALUE_SYM) {
+                lhs.value_type = LVALUE;
+                lhs.reg = tb_inst_get_symbol_address(func, lhs.sym->backing.s);
+            }
+
             if (CUIK_QUAL_TYPE_HAS(GET_TYPE(), CUIK_QUAL_ATOMIC)) {
                 // Load inputs
                 IRVal rhs = GET_ARG(1);
-                IRVal lhs = GET_ARG(0);
                 assert(lhs.value_type == LVALUE);
 
                 if (type->kind == KIND_STRUCT || type->kind == KIND_UNION) {
@@ -1317,12 +1341,8 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
                     }
                 }
             } else {
-                // Load inputs
-                IRVal lhs = GET_ARG(0);
-
                 // don't do this conversion for ASSIGN, since it won't be needing it
                 TB_Node* l = e->op == EXPR_ASSIGN ? NULL : cvt2rval(tu, func, &lhs);
-
                 IRVal rhs = GET_ARG(1);
 
                 // Try pointer arithmatic
@@ -1436,17 +1456,30 @@ static IRVal irgen_subexpr(TranslationUnit* tu, TB_Function* func, Cuik_Expr* _,
             {
                 tb_inst_set_control(func, if_true);
                 true_val = irgen_as_rvalue(tu, func, e->ternary.left);
-                tb_inst_goto(func, exit);
+
+                if (tb_inst_get_control(func) != NULL) {
+                    tb_inst_goto(func, exit);
+                }
             }
 
             TB_Node* false_val;
             {
                 tb_inst_set_control(func, if_false);
                 false_val = irgen_as_rvalue(tu, func, e->ternary.right);
-                tb_inst_goto(func, exit);
+
+                if (tb_inst_get_control(func) != NULL) {
+                    tb_inst_goto(func, exit);
+                }
             }
             tb_inst_set_control(func, exit);
             emit_location(tu, func, e->loc.start);
+
+            if (type->kind == KIND_VOID) {
+                return (IRVal){
+                    .value_type = RVALUE,
+                    .reg = NULL
+                };
+            }
 
             return (IRVal){
                 .value_type = RVALUE,
@@ -1926,7 +1959,12 @@ static void irgen_stmt(TranslationUnit* tu, TB_Function* func, Stmt* restrict s)
 
             irgen_stmt(tu, func, s->switch_.body);
 
-            fallthrough_label(func, break_label);
+            // don't make fallthru if it's a dead path
+            if (break_label->input_count > 0) {
+                fallthrough_label(func, break_label);
+            } else {
+                tb_inst_set_control(func, NULL);
+            }
             break;
         }
 
@@ -2007,6 +2045,10 @@ TB_Symbol* cuikcg_top_level(TranslationUnit* restrict tu, TB_Module* m, TB_Arena
     } else if ((s->flags & STMT_FLAGS_HAS_IR_BACKING) && s->backing.s) {
         Cuik_Type* type = cuik_canonical_type(s->decl.type);
         Subexpr* initial = get_root_subexpr(s->decl.initial);
+
+        if (s->decl.attrs.is_tls) {
+            tb_module_set_tls_index(tu->ir_mod, sizeof("_tls_index")-1, "_tls_index");
+        }
 
         TB_ModuleSectionHandle section = get_variable_storage(tu->ir_mod, &s->decl.attrs, s->decl.type.raw & CUIK_QUAL_CONST);
         int max_tb_objects;

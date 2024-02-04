@@ -25,7 +25,6 @@ local options = {
 	driver        = false,
 	shared        = false,
 	test          = false,
-	forth         = false,
 	lld           = false,
 	gcc           = false,
 	asan          = false,
@@ -43,19 +42,19 @@ local modules = {
 			-- toolchain support
 			"libCuik/lib/toolchains/msvc.c", "libCuik/lib/toolchains/gnu.c", "libCuik/lib/toolchains/darwin.c",
 			-- architectures
-			"libCuik/lib/targets/x64_desc.c", "libCuik/lib/targets/aarch64_desc.c"
+			"libCuik/lib/targets/x64_desc.c", "libCuik/lib/targets/aarch64_desc.c", "libCuik/lib/targets/mips_desc.c"
 		}, flags="-I libCuik/include", deps={"common"}
 	},
 	--   TildeBackend
 	tb = { srcs={
-			"tb/src/libtb.c", "tb/src/x64/x64_target.c", "tb/src/aarch64/aarch64_target.c"
+			"tb/src/libtb.c",
+			-- archictectures
+			"tb/src/x64/x64_target.c", "tb/src/aarch64/aarch64_target.c", "tb/src/mips/mips_target.c"
 		}, flags="-I tb/include -DCUIK_USE_TB -DTB_HAS_X64", deps={"common"}
 	},
 	-- executables:
 	--   Cuik command line
 	driver       = { is_exe=true, srcs={"main/main_driver.c"}, deps={"common", "cuik", "tb"} },
-	--   forth
-	forth        = { is_exe=true, srcs={"forth/forth.c"}, deps={"common", "tb"}, flags="-I libCuik/include" },
 	--   TB unittests
 	tests        = { is_exe=true, srcs={"tb/tests/cg_test.c"}, deps={"tb", "common"} },
 
@@ -269,7 +268,7 @@ local objs = {}
 for i, f in ipairs(src) do
 	local out = "bin/objs/"..filename(f)..".o"
 	ninja:write("build "..out..": cc "..f)
-	if out == "bin/objs/libcuik.o" then
+	if out == "bin/objs/libcuik.o" or out == "bin/objs/x64_desc.o" or out == "bin/objs/aarch64_desc.o" then
 		ninja:write(" | libCuik/lib/preproc/keywords.h libCuik/lib/preproc/dfa.h\n")
 	else
 		ninja:write("\n")
@@ -282,7 +281,6 @@ local obj_names = table.concat(objs, " ")
 local exe_name = "cuik"
 if options.tb    then exe_name = "tb" end
 if options.tests then exe_name = "tests" end
-if options.forth then exe_name = "forth" end
 
 -- placing executables into bin/
 exe_name = "bin/"..exe_name

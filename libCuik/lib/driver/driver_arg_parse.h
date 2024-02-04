@@ -40,11 +40,13 @@ static TargetOption target_options[] = {
     { "x64_linux_gnu",            cuik_target_x64,       CUIK_SYSTEM_LINUX,       CUIK_ENV_GNU,  cuik_toolchain_gnu    },
     { "aarch64_windows_msvc",     cuik_target_aarch64,   CUIK_SYSTEM_WINDOWS,     CUIK_ENV_MSVC, cuik_toolchain_msvc   },
     { "aarch64_linux_gnu",        cuik_target_aarch64,   CUIK_SYSTEM_LINUX,       CUIK_ENV_GNU,  cuik_toolchain_gnu    },
+    { "mips32_linux_gnu",         cuik_target_mips32,    CUIK_SYSTEM_LINUX,       CUIK_ENV_GNU,  cuik_toolchain_gnu    },
+    { "mips64_linux_gnu",         cuik_target_mips64,    CUIK_SYSTEM_LINUX,       CUIK_ENV_GNU,  cuik_toolchain_gnu    },
 };
 enum { TARGET_OPTION_COUNT = sizeof(target_options) / sizeof(target_options[0]) };
 
 struct Cuik_Arguments {
-    TB_Arena arena;
+    TB_Arena* arena;
 
     // _[0] is for non-flag arguments
     size_t count[ARG_DESC_COUNT];
@@ -86,7 +88,7 @@ static size_t find_arg_desc(const char* arg) {
 }
 
 static Cuik_Arg* insert_arg(Cuik_Arguments* restrict args, int slot) {
-    Cuik_Arg* new_arg = TB_ARENA_ALLOC(&args->arena, Cuik_Arg);
+    Cuik_Arg* new_arg = TB_ARENA_ALLOC(args->arena, Cuik_Arg);
     new_arg->prev = args->_[slot];
     args->_[slot] = new_arg;
     args->count[slot] += 1;
@@ -98,7 +100,7 @@ CUIK_API Cuik_Arguments* cuik_alloc_args(void) {
 }
 
 CUIK_API void cuik_free_args(Cuik_Arguments* args) {
-    tb_arena_destroy(&args->arena);
+    tb_arena_destroy(args->arena);
     cuik_free(args);
 }
 
@@ -152,7 +154,7 @@ CUIK_API void cuik_parse_args(Cuik_Arguments* restrict args, int argc, const cha
 
 CUIK_API bool cuik_parse_driver_args(Cuik_DriverArgs* comp_args, int argc, const char* argv[]) {
     Cuik_Arguments* args = cuik_alloc_args();
-    tb_arena_create(&args->arena, TB_ARENA_SMALL_CHUNK_SIZE);
+    args->arena = tb_arena_create(TB_ARENA_SMALL_CHUNK_SIZE);
 
     cuik_parse_args(args, argc, argv);
 
@@ -275,6 +277,11 @@ CUIK_API bool cuik_args_to_driver(Cuik_DriverArgs* comp_args, Cuik_Arguments* re
         comp_args->entrypoint = entry->value;
     }
 
+    Cuik_Arg* mf = args->_[ARG_DEPFILE];
+    if (mf) {
+        comp_args->dep_file = mf->value;
+    }
+
     Cuik_Arg* threads = args->_[ARG_THREADS];
     if (threads) {
         if (threads->value != arg_is_set) {
@@ -302,10 +309,8 @@ CUIK_API bool cuik_args_to_driver(Cuik_DriverArgs* comp_args, Cuik_Arguments* re
     if (args->_[ARG_ASSEMBLY]) comp_args->assembly = true;
     #endif
 
-    if (args->_[ARG_OPTLVL]) {
-        comp_args->opt_level = atoi(args->_[ARG_OPTLVL]->value);
-    }
-
+    TOGGLE(ARG_DEPS, write_deps);
+    TOGGLE(ARG_OPTLVL, optimize);
     TOGGLE(ARG_PP, preprocess);
     TOGGLE(ARG_PPTEST, test_preproc);
     TOGGLE(ARG_RUN, run);
