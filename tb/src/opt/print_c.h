@@ -11,7 +11,15 @@ char *nl_buffer_get(nl_buffer_t *buf);
 
 typedef struct {
     size_t gvn;
+    size_t label;
+    bool used: 1;
 } CFmtFrame;
+
+typedef struct {
+    size_t gvn;
+    size_t label;
+    bool used: 1;
+} CFmtFallNext;
 
 typedef struct {
     size_t low;
@@ -23,13 +31,15 @@ typedef struct {
     TB_Passes* opt;
     TB_Function* f;
     TB_Module *module;
+    size_t a;
+    size_t num_labels;
     DynArray(CFmtFrame *) visited_blocks;
     NL_Table block_ranges;
     TB_CFG cfg;
     TB_Scheduler sched;
     NL_HashSet completed_blocks;
     NL_HashSet needed_blocks;
-    NL_HashSet declared_vars;
+    DynArray(size_t) declared_vars;
     nl_buffer_t *globals;
     nl_buffer_t *args;
     nl_buffer_t *pre;
@@ -37,53 +47,10 @@ typedef struct {
     TB_Node *return_block;
     ptrdiff_t loop_goes_to;
     int depth;
-    int inline_depth;
-    int max_inline_depth;
-    bool can_inline: 1;
-    bool can_inline_return: 1;
 } CFmtState;
 
-// static size_t c_fmt_type_size(TB_DataType dt) {
-//     switch (dt.type) {
-//         case TB_INT: {
-//             if (dt.data == 0) return 0;
-//             if (dt.data == 1) return 1;
-//             if (dt.data == 8) return 1;
-//             if (dt.data == 16) return 2;
-//             if (dt.data == 32) return 4;
-//             if (dt.data == 64) return 8;
-//             else __builtin_trap();
-//             break;
-//         }
-//         case TB_PTR: {
-//             if (dt.data == 0) return sizeof(void *);
-//             else tb_todo();
-//             break;
-//         }
-//         case TB_FLOAT: {
-//             if (dt.data == TB_FLT_32) return sizeof(float);
-//             if (dt.data == TB_FLT_64) return sizeof(double);
-//             break;
-//         }
-//         case TB_TUPLE: {
-//             tb_todo();
-//             break;
-//         }
-//         case TB_CONTROL: {
-//             tb_todo();
-//             break;
-//         }
-//         case TB_MEMORY: {
-//             tb_todo();
-//             break;
-//         }
-//         default: {
-//             tb_todo();
-//             break;
-//         }
-//     }
-//     return 0;
-// }
+static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def);
+static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start);
 
 static void c_fmt_spaces(CFmtState *ctx) {
     for (unsigned char i = 0; i < ctx->depth; i++) {
@@ -133,18 +100,18 @@ static const char *c_fmt_type_name(TB_DataType dt) {
     return "void *";
 }
 
-static void c_fmt_declare(CFmtState* ctx, TB_Node* n) {
-    if (nl_hashset_put(&ctx->declared_vars, n)) {
-        nl_buffer_format(ctx->pre, "  %s v%u;\n", c_fmt_type_name(n->dt), n->gvn);
-    }
-}
-
 static void c_fmt_output(CFmtState* ctx, TB_Node* n) {
     c_fmt_spaces(ctx);
-    // if (n->users != NULL) {
-        c_fmt_declare(ctx, n);
-        nl_buffer_format(ctx->buf, "v%u = ", n->gvn);
-    // }
+    if (n->users != NULL) {
+        FOREACH_N(i, 0, dyn_array_length(ctx->declared_vars)) {
+            if (ctx->declared_vars[i] == n->gvn) {
+                nl_buffer_format(ctx->buf, "v%u = ", n->gvn);
+                return;
+            }
+        }
+        nl_buffer_format(ctx->buf, "%s v%u = ", c_fmt_type_name(n->dt), n->gvn);
+        dyn_array_put(ctx->declared_vars, n->gvn);
+    }
 }
 
 static bool c_fmt_will_inline(TB_Node *n) {
@@ -225,296 +192,264 @@ static bool c_fmt_will_inline(TB_Node *n) {
     return false;
 }
 
-static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def) {
-    if (c_fmt_will_inline(n)) {
-        if (n->type == TB_SELECT) {
-            TB_Node *cond = n->inputs[n->input_count-3];
-            TB_Node *then = n->inputs[n->input_count-2];
-            TB_Node *els = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, cond, false);
-            nl_buffer_format(ctx->buf, " ? ");
-            c_fmt_ref_to_node(ctx, then, false);
-            nl_buffer_format(ctx->buf, " : ");
-            c_fmt_ref_to_node(ctx, els, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_SHL) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " << ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_SHR || n->type == TB_SAR) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " >> ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_AND) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " & ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_OR) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " | ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_XOR) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " ^ ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_ADD || n->type == TB_FADD) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " + ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_SUB || n->type == TB_FSUB) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " - ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_MUL || n->type == TB_FMUL) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " * ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_SDIV) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " / (int64_t)");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_UDIV) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "((uint64_t)", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " / (uint64_t)");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_FDIV) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " / ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_EQ) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " == ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_NE) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " != ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_SLT) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " < (int64_t) ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_SLE) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " <= (int64_t) ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_ULT) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            if (lhs->gvn == 173) {
-                // asm("int3");
-            }
-            nl_buffer_format(ctx->buf, "((uint64_t) ", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " < (uint64_t) ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_ULE) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "((uint64_t) ", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " <= (uint64_t) ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_FLT) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " < ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_CMP_FLE) {
-            TB_Node *lhs = n->inputs[n->input_count-2];
-            TB_Node *rhs = n->inputs[n->input_count-1];
-            nl_buffer_format(ctx->buf, "(", n->gvn);
-            c_fmt_ref_to_node(ctx, lhs, false);
-            nl_buffer_format(ctx->buf, " <= ");
-            c_fmt_ref_to_node(ctx, rhs, false);
-            nl_buffer_format(ctx->buf, ")");
-        } else if (n->type == TB_ROOT) {
-            if (def) {
-                nl_buffer_format(ctx->buf, "\nbb%u:;\n", n->gvn);
+static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
+    if (n->type == TB_SELECT) {
+        TB_Node *cond = n->inputs[n->input_count-3];
+        TB_Node *then = n->inputs[n->input_count-2];
+        TB_Node *els = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, cond, false);
+        nl_buffer_format(ctx->buf, " ? ");
+        c_fmt_ref_to_node(ctx, then, false);
+        nl_buffer_format(ctx->buf, " : ");
+        c_fmt_ref_to_node(ctx, els, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_SHL) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " << ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_SHR || n->type == TB_SAR) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " >> ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_AND) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " & ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_OR) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " | ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_XOR) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " ^ ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_ADD || n->type == TB_FADD) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " + ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_SUB || n->type == TB_FSUB) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " - ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_MUL || n->type == TB_FMUL) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " * ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_SDIV) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " / (int64_t)");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_UDIV) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "((uint64_t)", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " / (uint64_t)");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_FDIV) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " / ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_EQ) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " == ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_NE) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " != ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_SLT) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " < (int64_t) ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_SLE) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " <= (int64_t) ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_ULT) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "((uint64_t) ", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " < (uint64_t) ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_ULE) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "((uint64_t) ", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " <= (uint64_t) ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_FLT) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " < ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_CMP_FLE) {
+        TB_Node *lhs = n->inputs[n->input_count-2];
+        TB_Node *rhs = n->inputs[n->input_count-1];
+        nl_buffer_format(ctx->buf, "(", n->gvn);
+        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, " <= ");
+        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, ")");
+    } else if (n->type == TB_FLOAT32_CONST) {
+        TB_NodeFloat32* f = TB_NODE_GET_EXTRA(n);
+        nl_buffer_format(ctx->buf, "%f", f->value);
+    } else if (n->type == TB_FLOAT64_CONST) {
+        TB_NodeFloat64* f = TB_NODE_GET_EXTRA(n);
+        nl_buffer_format(ctx->buf, "%f", f->value);
+    } else if (n->type == TB_SYMBOL) {
+        TB_Symbol* sym = TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym;
+        if (sym->name[0]) {
+            if (sym->tag == TB_SYMBOL_GLOBAL) {
+                nl_buffer_format(ctx->buf, "tb2c_sym%zu_%s", sym->symbol_id, sym->name);
             } else {
-                nl_hashset_put(&ctx->needed_blocks, n);
-                nl_buffer_format(ctx->buf, "bb%u", n->gvn);
+                nl_buffer_format(ctx->buf, "%s", sym->name);
             }
-        } else if (n->type == TB_PROJ && n->dt.type == TB_CONTROL) {
-            if (def) {
-                nl_buffer_format(ctx->buf, "\nbb%u:;\n", n->gvn);
-                size_t count = 0;
-                FOR_USERS(u, n) {
-                    if (u->n != NULL && u->n->type == TB_PHI && u->n->dt.type != TB_MEMORY && u->n->dt.type != TB_CONTROL && u->n->dt.type != TB_TUPLE) {
-                        count += 1;
-                    }
-                }
-            } else {
-                nl_hashset_put(&ctx->needed_blocks, n);
-                nl_buffer_format(ctx->buf, "bb%u", n->gvn);
-            }
-        } else if (n->type == TB_REGION) {
-            TB_NodeRegion* r = TB_NODE_GET_EXTRA(n);
-            if (def) {
-                nl_buffer_format(ctx->buf, "\nbb%u:;\n", n->gvn);
-                size_t count = 0;
-                FOR_USERS(u, n) {
-                    if (u->n != NULL && u->n->type == TB_PHI && u->n->dt.type != TB_MEMORY && u->n->dt.type != TB_CONTROL && u->n->dt.type != TB_TUPLE) {
-                        count += 1;
-                    }
-                }
-            } else {
-                nl_hashset_put(&ctx->needed_blocks, n);
-                nl_buffer_format(ctx->buf, "bb%zu", n->gvn);
-            }
-        } else if (n->type == TB_FLOAT32_CONST) {
-            TB_NodeFloat32* f = TB_NODE_GET_EXTRA(n);
-            nl_buffer_format(ctx->buf, "%f", f->value);
-        } else if (n->type == TB_FLOAT64_CONST) {
-            TB_NodeFloat64* f = TB_NODE_GET_EXTRA(n);
-            nl_buffer_format(ctx->buf, "%f", f->value);
-        } else if (n->type == TB_SYMBOL) {
-            TB_Symbol* sym = TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym;
-            if (sym->name[0]) {
-                if (sym->tag == TB_SYMBOL_GLOBAL) {
-                    nl_buffer_format(ctx->buf, "tb2c_sym%zu_%s", sym->symbol_id, sym->name);
-                } else {
-                    nl_buffer_format(ctx->buf, "%s", sym->name);
-                }
-            } else if (ctx->module->is_jit) {
-                void *addr = sym->address;
-                nl_buffer_format(ctx->buf, "(void*)%p", TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym->address);
-            } else {
-                switch((int) sym->tag) {
-                    case TB_SYMBOL_EXTERNAL: {
-                        nl_buffer_format(ctx->buf, "(void*)0");
-                        break;
-                    }
-                    case TB_SYMBOL_GLOBAL: {
-                        TB_Global *g = (void *) sym;
-
-                        uint8_t *data = tb_platform_heap_alloc(g->size);
-
-                        memset(&data[g->pos], 0, g->size);
-                        FOREACH_N(k, 0, g->obj_count) {
-                            if (g->objects[k].type == TB_INIT_OBJ_REGION) {
-                                assert(g->objects[k].offset + g->objects[k].region.size <= g->size);
-                                memcpy(&data[g->pos + g->objects[k].offset], g->objects[k].region.ptr, g->objects[k].region.size);
-                            }
-                        }
-
-                        nl_buffer_format(ctx->buf, "\"");
-                        FOREACH_N(k, 0, g->size) {
-                            if (data[k] == 0 && k + 1 == g->size) {
-                                break;
-                            }
-                            if (32 <= data[k] && data[k] <= 126) {
-                                nl_buffer_format(ctx->buf, "%c", data[k]);
-                            } else if (data[k] == '\t') {
-                                nl_buffer_format(ctx->buf, "\\t");
-                            } else if (data[k] == '\r') {
-                                nl_buffer_format(ctx->buf, "\\r");
-                            } else if (data[k] == '\n') {
-                                nl_buffer_format(ctx->buf, "\\n");
-                            } else if (data[k] == ' ') {
-                                nl_buffer_format(ctx->buf, " ");
-                            } else {
-                                nl_buffer_format(ctx->buf, "\\x%02x", data[k]);
-                            }                  
-                        }
-                        nl_buffer_format(ctx->buf, "\"");
-
-                        tb_platform_heap_free(data);
-                        break;
-                    }
-                    case TB_SYMBOL_FUNCTION: {
-                        nl_buffer_format(ctx->buf, "(void *) 0");
-                        break;
-                    }
-                }
-            }
-        } else if (n->type == TB_ZERO_EXT) {
-            c_fmt_ref_to_node(ctx, n->inputs[1], false);
-        } else if (n->type == TB_SIGN_EXT) {
-            c_fmt_ref_to_node(ctx, n->inputs[1], false);
-        } else if (n->type == TB_INTEGER_CONST) {
-            TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
-
-            if (num->value < 0xFFFF) {
-                nl_buffer_format(ctx->buf, "%"PRIi64"llu", num->value);
-            } else {
-                nl_buffer_format(ctx->buf, "%#0"PRIx64"llu", num->value);
-            }
+        } else if (ctx->module->is_jit) {
+            void *addr = sym->address;
+            nl_buffer_format(ctx->buf, "(void*)%p", TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym->address);
         } else {
-            assert(false && "wrong node type");
+            switch((int) sym->tag) {
+                case TB_SYMBOL_EXTERNAL: {
+                    nl_buffer_format(ctx->buf, "(void*)0");
+                    break;
+                }
+                case TB_SYMBOL_GLOBAL: {
+                    TB_Global *g = (void *) sym;
+
+                    uint8_t *data = tb_platform_heap_alloc(g->size);
+
+                    memset(&data[g->pos], 0, g->size);
+                    FOREACH_N(k, 0, g->obj_count) {
+                        if (g->objects[k].type == TB_INIT_OBJ_REGION) {
+                            assert(g->objects[k].offset + g->objects[k].region.size <= g->size);
+                            memcpy(&data[g->pos + g->objects[k].offset], g->objects[k].region.ptr, g->objects[k].region.size);
+                        }
+                    }
+
+                    nl_buffer_format(ctx->buf, "\"");
+                    FOREACH_N(k, 0, g->size) {
+                        if (data[k] == 0 && k + 1 == g->size) {
+                            break;
+                        }
+                        if (32 <= data[k] && data[k] <= 126) {
+                            nl_buffer_format(ctx->buf, "%c", data[k]);
+                        } else if (data[k] == '\t') {
+                            nl_buffer_format(ctx->buf, "\\t");
+                        } else if (data[k] == '\r') {
+                            nl_buffer_format(ctx->buf, "\\r");
+                        } else if (data[k] == '\n') {
+                            nl_buffer_format(ctx->buf, "\\n");
+                        } else if (data[k] == ' ') {
+                            nl_buffer_format(ctx->buf, " ");
+                        } else {
+                            nl_buffer_format(ctx->buf, "\\x%02x", data[k]);
+                        }                  
+                    }
+                    nl_buffer_format(ctx->buf, "\"");
+
+                    tb_platform_heap_free(data);
+                    break;
+                }
+                case TB_SYMBOL_FUNCTION: {
+                    nl_buffer_format(ctx->buf, "(void *) 0");
+                    break;
+                }
+            }
+        }
+    } else if (n->type == TB_ZERO_EXT) {
+        c_fmt_ref_to_node(ctx, n->inputs[1], false);
+    } else if (n->type == TB_SIGN_EXT) {
+        c_fmt_ref_to_node(ctx, n->inputs[1], false);
+    } else if (n->type == TB_INTEGER_CONST) {
+        TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
+
+        if (num->value < 0xFFFF) {
+            nl_buffer_format(ctx->buf, "%"PRIi64"llu", num->value);
+        } else {
+            nl_buffer_format(ctx->buf, "%#0"PRIx64"llu", num->value);
         }
     } else {
-        assert(!def && "can't define that node");
-        nl_buffer_format(ctx->buf, "v%u", n->gvn);
+        assert(false && "wrong node type");
     }
 }
 
-static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start);
+static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def) {
+    if (!def) {
+        if (c_fmt_will_inline(n)) {
+            c_fmt_inline_node(ctx, n);
+        } else {
+            nl_buffer_format(ctx->buf, "v%u", n->gvn);
+            return;
+        }
+    }
+}
+
 
 CFmtBlockRange *c_fmt_get_block_range(CFmtState* ctx, TB_Node* n) {
     if (nl_table_get(&ctx->block_ranges, n) == NULL) {
@@ -543,7 +478,7 @@ TB_Node *c_fmt_only_return(CFmtState *ctx, TB_Node *target) {
         TB_Node* n = ws->items[i];
 
         // skip these
-        if (c_fmt_will_inline(n) && n->type != TB_ROOT) {
+        if (c_fmt_will_inline(n) && n->type != TB_RETURN) {
             continue;
         }
 
@@ -551,7 +486,7 @@ TB_Node *c_fmt_only_return(CFmtState *ctx, TB_Node *target) {
             continue;
         }
 
-        if (n->type == TB_ROOT) {
+        if (n->type == TB_RETURN) {
             return n;
         } else {
             return NULL;
@@ -564,74 +499,67 @@ TB_Node *c_fmt_only_return(CFmtState *ctx, TB_Node *target) {
 static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
     TB_Node* target = fallthru ? cfg_next_control(n) : cfg_next_bb_after_cproj(n);
 
-    if (ctx->can_inline_return && target == ctx->return_block) {
-        TB_Node *node = c_fmt_only_return(ctx, target);
-        if (node != NULL) {
-            int phi_i = -1;
-            FOR_USERS(u, n) {
-                if (u->n->type == TB_REGION) {
-                    phi_i = 1 + u->slot;
-                    break;
-                }
+    TB_Node *node = c_fmt_only_return(ctx, target);
+    if (node != NULL) {
+        int phi_i = -1;
+        FOR_USERS(u, n) {
+            if (u->n->type == TB_REGION) {
+                phi_i = 1 + u->slot;
+                break;
             }
+        }
 
-            NL_Table table = nl_table_alloc(4);
-            FOR_USERS(u, target) {
-                if (u->n->inputs[phi_i] != NULL) {
-                    if (u->n->inputs[phi_i]->dt.type != TB_CONTROL && u->n->inputs[phi_i]->dt.type != TB_MEMORY) {
-                        nl_table_put(&table, u->n, u->n->inputs[phi_i]);
-                    }
+        NL_Table table = nl_table_alloc(4);
+        FOR_USERS(u, target) {
+            if (u->n->inputs[phi_i] != NULL) {
+                if (u->n->inputs[phi_i]->dt.type != TB_CONTROL && u->n->inputs[phi_i]->dt.type != TB_MEMORY) {
+                    nl_table_put(&table, u->n, u->n->inputs[phi_i]);
                 }
             }
-            size_t count = 0;
-            FOREACH_N(i, 1, node->input_count) {
-                if (i >= 4) {
-                    count += 1;
+        }
+        size_t count = 0;
+        FOREACH_N(i, 3, node->input_count) {
+            count += 1;
+        }
+        if (count == 0) {
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "return;\n");
+            return;
+        } else if (count == 1) {
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "return ");
+            FOREACH_N(i, 3, node->input_count) {
+                TB_Node *ent = nl_table_get(&table, node->inputs[i]);
+                if (ent == NULL) {
+                    ent = node->inputs[i];
                 }
+                c_fmt_ref_to_node(ctx, ent, false);
             }
-            if (count == 0) {
+            nl_buffer_format(ctx->buf, ";\n");
+            return;
+        } else {
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "{\n");
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "  tb2c_%s_ret_t ret;\n", ctx->name);
+            
+            bool index = 0;
+            FOREACH_N(i, 3, n->input_count) {
                 c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "return;\n");
-                return;
-            } else if (count == 1) {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "return ");
-                FOREACH_N(i, 1, node->input_count) {
-                    if (i >= 4) {
-                        TB_Node *ent = nl_table_get(&table, node->inputs[i]);
-                        if (ent == NULL) {
-                            ent = node->inputs[i];
-                        }
-                        c_fmt_ref_to_node(ctx, ent, false);
-                    }
+                nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
+                TB_Node *ent = nl_table_get(&table, node->inputs[i]);
+                if (ent == NULL) {
+                    ent = node->inputs[i];
                 }
+                c_fmt_ref_to_node(ctx, ent, false);
                 nl_buffer_format(ctx->buf, ";\n");
-                return;
-            } else {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "{\n");
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "  tb2c_%s_ret_t ret;\n", ctx->name);
-                
-                bool index = 0;
-                FOREACH_N(i, 1, n->input_count) {
-                    if (i >= 4) {
-                        c_fmt_spaces(ctx);
-                        nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
-                        TB_Node *ent = nl_table_get(&table, node->inputs[i]);
-                        if (ent == NULL) {
-                            ent = node->inputs[i];
-                        }
-                        c_fmt_ref_to_node(ctx, ent, false);
-                        nl_buffer_format(ctx->buf, ";\n");
-                        index += 1;
-                    }
-                }
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "  return ret;\n");
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "}\n");
+                index += 1;
             }
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "  return ret;\n");
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "}\n");
+            return;
         }
     }
 
@@ -656,11 +584,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                     }
                 }
             }
-            if (has_phi >= 2) {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "{\n");
-                ctx->depth += 1;
-            }
+            ctx->a += has_phi;
             size_t pos = 0;
             FOR_USERS(u, target) {
                 if (u->n->type == TB_PHI) {
@@ -669,7 +593,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                             assert(phi_i >= 0);
                             if (pos != 0) {
                                 c_fmt_spaces(ctx);
-                                nl_buffer_format(ctx->buf, "%s a%zu = ", c_fmt_type_name(u->n->dt), pos);
+                                nl_buffer_format(ctx->buf, "%s a%zu = ", c_fmt_type_name(u->n->dt), ctx->a + pos);
                                 c_fmt_ref_to_node(ctx, u->n->inputs[phi_i], false);
                                 nl_buffer_format(ctx->buf, ";\n");
                             }
@@ -690,50 +614,44 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                                 nl_buffer_format(ctx->buf, ";\n");
                             } else {
                                 c_fmt_output(ctx, u->n);
-                                nl_buffer_format(ctx->buf, "a%zu;\n", pos);
+                                nl_buffer_format(ctx->buf, "a%zu;\n", ctx->a + pos);
                             }
                             pos += 1;
                         }
                     }
                 }
             }
-            if (has_phi >= 2) {
-                ctx->depth -= 1;
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "}\n");
-            }
         }
     }
 
-    bool use_goto = false;
-    // bool use_goto = true;
     FOREACH_N(i, 0, dyn_array_length(ctx->visited_blocks)) {
-        if (ctx->visited_blocks[i]->gvn == target->gvn) {
-            use_goto = true;
-            break;
+        CFmtFrame *next = ctx->visited_blocks[i];
+        if (next->gvn == target->gvn) {
+            next->used = true;
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "goto label%zu;\n", next->label);
+            return;
         }
     }
-    if (use_goto || ctx->inline_depth >= ctx->max_inline_depth) {
-        c_fmt_spaces(ctx);
-        // if (target->gvn == ctx->continue_goes_to) {
-
-        // }
-        nl_buffer_format(ctx->buf, "goto ");
-        c_fmt_ref_to_node(ctx, target, false);
-        nl_buffer_format(ctx->buf, ";\n");
-    } else {
-        ctx->inline_depth += 1;
-        c_fmt_bb(ctx, target);
-        ctx->inline_depth -= 1;
-    }
+    c_fmt_bb(ctx, target);
 }
 
 static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
     CFmtFrame frame = (CFmtFrame) {
         .gvn = bb_start->gvn,
+        .label = ctx->num_labels++,
+        .used = false,
     };
 
+    size_t declared_vars_length = dyn_array_length(ctx->declared_vars);
+
+    nl_buffer_t *old_buf = ctx->buf;
+    ctx->buf = nl_buffer_new();
+
     dyn_array_put(ctx->visited_blocks, &frame);
+
+    // c_fmt_spaces(ctx);
+    // nl_buffer_format(ctx->buf, "/* bb%u */\n", bb_start->gvn);
 
     TB_BasicBlock* bb = ctx->opt->scheduled[bb_start->gvn];
     Worklist* ws = &ctx->opt->worklist;
@@ -754,14 +672,8 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
             continue;
         }
 
-        if (n->type == TB_NULL || n->type == TB_PHI || n->type == TB_PROJ) {
+        if (n->type == TB_MERGEMEM || n->type == TB_SPLITMEM || n->type == TB_NULL || n->type == TB_PHI || n->type == TB_PROJ) {
             continue;
-        }
-
-        TB_NodeLocation* v;
-        if (v = nl_table_get(&ctx->f->locations, n), v) {
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "# location %s:%d\n", v->file->path, v->line);
         }
 
         switch (n->type) {
@@ -850,8 +762,6 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     ctx->depth -= 1;
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "}\n");
-                    // c_fmt_spaces(ctx);
-                    // nl_buffer_format(ctx->buf, "/* TODO: branch/%zu */ ", (size_t) br->succ_count);
                 }
                 break;
             }
@@ -862,12 +772,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 break;
             }
 
-            case TB_ROOT: {
+            case TB_RETURN: {
                 size_t count = 0;
-                FOREACH_N(i, 1, n->input_count) {
-                    if (i >= 4) {
-                        count += 1;
-                    }
+                FOREACH_N(i, 3, n->input_count) {
+                    count += 1;
                 }
                 if (count == 0) {
                     c_fmt_spaces(ctx);
@@ -875,10 +783,8 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 } else if (count == 1) {
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "return ");
-                    FOREACH_N(i, 1, n->input_count) {
-                        if (i >= 4) {
-                            c_fmt_ref_to_node(ctx, n->inputs[i], false);
-                        }
+                    FOREACH_N(i, 3, n->input_count) {
+                        c_fmt_ref_to_node(ctx, n->inputs[i], false);
                     }
                     nl_buffer_format(ctx->buf, ";\n");
                 } else {
@@ -888,14 +794,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     nl_buffer_format(ctx->buf, "  tb2c_%s_ret_t ret;\n", ctx->name);
                     
                     bool index = 0;
-                    FOREACH_N(i, 1, n->input_count) {
-                        if (i >= 4) {
-                            c_fmt_spaces(ctx);
-                            nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
-                            c_fmt_ref_to_node(ctx, n->inputs[i], false);
-                            nl_buffer_format(ctx->buf, ";\n");
-                            index += 1;
-                        }
+                    FOREACH_N(i, 3, n->input_count) {
+                        c_fmt_spaces(ctx);
+                        nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
+                        c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                        nl_buffer_format(ctx->buf, ";\n");
+                        index += 1;
                     }
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "  return ret;\n");
@@ -949,10 +853,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
             }
             
             case TB_LOCAL: {
+                dyn_array_put(ctx->declared_vars, n->gvn);
                 TB_NodeLocal* l = TB_NODE_GET_EXTRA(n);
-                if (nl_hashset_put(&ctx->declared_vars, n)) {
-                    nl_buffer_format(ctx->pre, "  uint8_t v%u[0x%x];\n", n->gvn, l->size);
-                }
+                c_fmt_spaces(ctx);
+                nl_buffer_format(ctx->buf, "uint8_t v%u[0x%x];\n", n->gvn, l->size);
                 break;
             }
             
@@ -1234,7 +1138,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
             case TB_MEMBER_ACCESS: {
                 TB_Node *ptr = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(void*) ((size_t) ");
+                nl_buffer_format(ctx->buf, "(void*) ((char *) ");
                 c_fmt_ref_to_node(ctx, ptr, false);
                 nl_buffer_format(ctx->buf, " + %"PRIi64, TB_NODE_GET_EXTRA_T(n, TB_NodeMember)->offset);
                 nl_buffer_format(ctx->buf, ");\n");
@@ -1273,7 +1177,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *ptr = n->inputs[n->input_count-2];
                 TB_Node *index = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(void*) ((size_t) ");
+                nl_buffer_format(ctx->buf, "(void*) ((char *) ");
                 c_fmt_ref_to_node(ctx, ptr, false);
                 nl_buffer_format(ctx->buf, " + ");
                 c_fmt_ref_to_node(ctx, index, false);
@@ -1424,6 +1328,32 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
     }
 
     dyn_array_pop(ctx->visited_blocks);
+
+    while (dyn_array_length(ctx->declared_vars) > declared_vars_length) {
+        dyn_array_pop(ctx->declared_vars);
+    }
+
+    nl_buffer_t *buf = ctx->buf;
+    ctx->buf = old_buf;
+    if (frame.used) {
+        c_fmt_spaces(ctx);
+        nl_buffer_format(ctx->buf, "label%zu:;\n", frame.label);
+        c_fmt_spaces(ctx);
+        nl_buffer_format(ctx->buf, "{\n  ");
+        for (const char *c = nl_buffer_get(buf); *c != '\0'; c++) {
+            if (*c == '\n') {
+                nl_buffer_format(ctx->buf, "\n  ");
+            } else {
+                nl_buffer_format(ctx->buf, "%c", *c);
+            }
+        }
+        ctx->depth -= 1;
+        c_fmt_spaces(ctx);
+        nl_buffer_format(ctx->buf, "}\n");
+        ctx->depth += 1;
+    } else {
+        nl_buffer_format(ctx->buf, "%s", nl_buffer_get(buf));
+    }
 }
 
 TB_API char *tb_pass_c_prelude(TB_Module *mod) {
@@ -1431,8 +1361,8 @@ TB_API char *tb_pass_c_prelude(TB_Module *mod) {
 
     nl_buffer_t *buf = nl_buffer_new();
     
-    nl_buffer_format(buf, "#include <stddef.h>\n");
     nl_buffer_format(buf, "#include <stdint.h>\n");
+    nl_buffer_format(buf, "#include <string.h>\n");
     nl_buffer_format(buf, "\n");
     NL_HashSet* syms = &tb_thread_info(mod)->symbols;
     nl_hashset_for(sym_vp, syms) {
@@ -1533,19 +1463,13 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
 
     CFmtState ctx = { name, opt, f, f->super.module };
 
-    ctx.inline_depth = 0;
-    ctx.max_inline_depth = 0;
-    ctx.can_inline = true;
-    ctx.can_inline_return = true;
-
     ctx.globals = nl_buffer_new();
     ctx.args = nl_buffer_new();
-    ctx.pre = nl_buffer_new();
     ctx.buf = nl_buffer_new();
 
     // ctx.global_funcs = nl_hashset_alloc(ctx.module->compiled_function_count);
     ctx.visited_blocks = dyn_array_create(size_t, 8);
-    ctx.declared_vars = nl_hashset_alloc(8);
+    ctx.declared_vars = dyn_array_create(size_t, 16);
     ctx.needed_blocks = nl_hashset_alloc(ctx.cfg.block_count);
     ctx.completed_blocks = nl_hashset_alloc(ctx.cfg.block_count);
     ctx.block_ranges = nl_table_alloc(ctx.cfg.block_count);
@@ -1632,7 +1556,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
         nl_buffer_format(buf, "void");
     }
     nl_buffer_format(buf, ") {\n");
-    nl_buffer_format(buf, "%s", nl_buffer_get(ctx.pre));
     nl_buffer_format(buf, "%s", nl_buffer_get(ctx.buf));
     nl_buffer_format(buf, "}\n");
 

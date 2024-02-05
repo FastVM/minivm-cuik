@@ -48,17 +48,9 @@ class CompileAndRun:
     @staticmethod
     def cc(cc: str, file: str, opt: list[str] = []) -> 'CompileAndRun':
         with tempfile.TemporaryDirectory() as cc_outdir:
-            cc_stdout = str(pathlib.Path(cc_outdir) / 'cc.out.log')
-            cc_stderr = str(pathlib.Path(cc_outdir) / 'cc.err.log')
             cc_outfile = str(pathlib.Path(cc_outdir) / 'out.exe')
-            with open(cc_stdout, 'w') as out_w:
-                with open(cc_stderr, 'w') as err_w:
-                    cc_res = CommandResult.run(cc, file, '-w', '-o', cc_outfile, *opt)
-            run_stdout = str(pathlib.Path(cc_outdir) / 'run.out.log')
-            run_stderr = str(pathlib.Path(cc_outdir) / 'run.err.log')
-            with open(run_stdout, 'w') as out_w:
-                with open(run_stderr, 'w') as err_w:
-                    run_res = CommandResult.run(cc_outfile)
+            cc_res = CommandResult.run(cc, file, '-w', '-o', cc_outfile, *opt)
+            run_res = CommandResult.run(cc_outfile)
             return CompileAndRun(
                 compile = cc_res,
                 run = run_res,
@@ -87,7 +79,7 @@ class Args:
     def __init__(self, argv0: str, *args: list[str]):
         self.c = 'cc'
         self.xcc = []
-        self.xcuik = ['-O3']
+        self.xcuik = []
         self.clean = False
         self.file_dir = default_test_dir()
         mode: ArgMode = ArgMode.BASE
