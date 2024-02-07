@@ -49,7 +49,8 @@ typedef struct {
     int depth;
 } CFmtState;
 
-static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def);
+static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n);
+static void c_fmt_typed_ref_to_node(CFmtState* ctx, TB_DataType dt, TB_Node* n);
 static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start);
 
 static void c_fmt_spaces(CFmtState *ctx) {
@@ -67,6 +68,48 @@ static const char *c_fmt_type_name(TB_DataType dt) {
             if (dt.data <= 16) return  "uint16_t";
             if (dt.data <= 32) return  "uint32_t";
             if (dt.data <= 64) return  "uint64_t";
+            else __builtin_trap();
+            break;
+        }
+        case TB_PTR: {
+            if (dt.data == 0) return  "void*";
+            else tb_todo();
+            break;
+        }
+        case TB_FLOAT: {
+            if (dt.data == TB_FLT_32) return  "float";
+            if (dt.data == TB_FLT_64) return  "double";
+            break;
+        }
+        case TB_TUPLE: {
+            tb_todo();
+            break;
+        }
+        case TB_CONTROL: {
+            tb_todo();
+            break;
+        }
+        case TB_MEMORY: {
+            tb_todo();
+            break;
+        }
+        default: {
+            tb_todo();
+            break;
+        }
+    }
+    return "void *";
+}
+
+static const char *c_fmt_type_name_signed(TB_DataType dt) {
+    switch (dt.type) {
+        case TB_INT: {
+            if (dt.data == 0) return  "void";
+            if (dt.data == 1) return  "char";
+            if (dt.data <= 8) return  "int8_t";
+            if (dt.data <= 16) return  "int16_t";
+            if (dt.data <= 32) return  "int32_t";
+            if (dt.data <= 64) return  "int64_t";
             else __builtin_trap();
             break;
         }
@@ -197,164 +240,197 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
         TB_Node *cond = n->inputs[n->input_count-3];
         TB_Node *then = n->inputs[n->input_count-2];
         TB_Node *els = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, cond, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(char) ");
+        c_fmt_ref_to_node(ctx, cond);
         nl_buffer_format(ctx->buf, " ? ");
-        c_fmt_ref_to_node(ctx, then, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, then);
         nl_buffer_format(ctx->buf, " : ");
-        c_fmt_ref_to_node(ctx, els, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, els);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_SHL) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " << ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_SHR || n->type == TB_SAR) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " >> ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_AND) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " & ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_OR) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " | ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_XOR) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " ^ ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_ADD || n->type == TB_FADD) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " + ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_SUB || n->type == TB_FSUB) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " - ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_MUL || n->type == TB_FMUL) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " * ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_SDIV) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
-        nl_buffer_format(ctx->buf, " / (int64_t)");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
+        nl_buffer_format(ctx->buf, " / ");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_UDIV) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "((uint64_t)", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
-        nl_buffer_format(ctx->buf, " / (uint64_t)");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
+        nl_buffer_format(ctx->buf, " / ");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_FDIV) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " / ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_EQ) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " == ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_NE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " != ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_SLT) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
-        nl_buffer_format(ctx->buf, " < (int64_t) ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
+        nl_buffer_format(ctx->buf, " < ");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_SLE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "((int64_t) ", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
-        nl_buffer_format(ctx->buf, " <= (int64_t) ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
+        nl_buffer_format(ctx->buf, " <= ");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_ULT) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "((uint64_t) ", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
-        nl_buffer_format(ctx->buf, " < (uint64_t) ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
+        nl_buffer_format(ctx->buf, " < ");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_ULE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "((uint64_t) ", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
-        nl_buffer_format(ctx->buf, " <= (uint64_t) ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
+        nl_buffer_format(ctx->buf, " <= ");
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_FLT) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " < ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_FLE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        nl_buffer_format(ctx->buf, "(", n->gvn);
-        c_fmt_ref_to_node(ctx, lhs, false);
+        nl_buffer_format(ctx->buf, "(");
+        c_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " <= ");
-        c_fmt_ref_to_node(ctx, rhs, false);
+        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
+        c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_FLOAT32_CONST) {
         TB_NodeFloat32* f = TB_NODE_GET_EXTRA(n);
@@ -423,9 +499,9 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
             }
         }
     } else if (n->type == TB_ZERO_EXT) {
-        c_fmt_ref_to_node(ctx, n->inputs[1], false);
+        c_fmt_ref_to_node(ctx, n->inputs[1]);
     } else if (n->type == TB_SIGN_EXT) {
-        c_fmt_ref_to_node(ctx, n->inputs[1], false);
+        c_fmt_ref_to_node(ctx, n->inputs[1]);
     } else if (n->type == TB_INTEGER_CONST) {
         TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
 
@@ -439,17 +515,19 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
     }
 }
 
-static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n, bool def) {
-    if (!def) {
-        if (c_fmt_will_inline(n)) {
-            c_fmt_inline_node(ctx, n);
-        } else {
-            nl_buffer_format(ctx->buf, "v%u", n->gvn);
-            return;
-        }
+static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n) {
+    if (c_fmt_will_inline(n)) {
+        c_fmt_inline_node(ctx, n);
+    } else {
+        nl_buffer_format(ctx->buf, "v%u", n->gvn);
+        return;
     }
 }
 
+static void c_fmt_typed_ref_to_node(CFmtState* ctx, TB_DataType dt, TB_Node *n) {
+    nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(dt));
+    c_fmt_ref_to_node(ctx, n);
+}
 
 CFmtBlockRange *c_fmt_get_block_range(CFmtState* ctx, TB_Node* n) {
     if (nl_table_get(&ctx->block_ranges, n) == NULL) {
@@ -533,7 +611,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                 if (ent == NULL) {
                     ent = node->inputs[i];
                 }
-                c_fmt_ref_to_node(ctx, ent, false);
+                c_fmt_ref_to_node(ctx, ent);
             }
             nl_buffer_format(ctx->buf, ";\n");
             return;
@@ -551,7 +629,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                 if (ent == NULL) {
                     ent = node->inputs[i];
                 }
-                c_fmt_ref_to_node(ctx, ent, false);
+                c_fmt_ref_to_node(ctx, ent);
                 nl_buffer_format(ctx->buf, ";\n");
                 index += 1;
             }
@@ -594,7 +672,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                             if (pos != 0) {
                                 c_fmt_spaces(ctx);
                                 nl_buffer_format(ctx->buf, "%s a%zu = ", c_fmt_type_name(u->n->dt), ctx->a + pos);
-                                c_fmt_ref_to_node(ctx, u->n->inputs[phi_i], false);
+                                c_fmt_ref_to_node(ctx, u->n->inputs[phi_i]);
                                 nl_buffer_format(ctx->buf, ";\n");
                             }
                             pos += 1;
@@ -610,7 +688,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                             assert(phi_i >= 0);
                             if (pos == 0) {
                                 c_fmt_output(ctx, u->n);
-                                c_fmt_ref_to_node(ctx, u->n->inputs[phi_i], false);
+                                c_fmt_ref_to_node(ctx, u->n->inputs[phi_i]);
                                 nl_buffer_format(ctx->buf, ";\n");
                             } else {
                                 c_fmt_output(ctx, u->n);
@@ -715,7 +793,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                         nl_buffer_format(ctx->buf, "if (");
                         FOREACH_N(i, 1, n->input_count) {
                             if (i != 1) nl_buffer_format(ctx->buf, ", ");
-                            c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                            c_fmt_ref_to_node(ctx, n->inputs[i]);
                         }
                         nl_buffer_format(ctx->buf, ") {\n");
                         ctx->depth += 1;
@@ -726,12 +804,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                         c_fmt_branch_edge(ctx, succ[1], false);
                     } else {
                         c_fmt_spaces(ctx);
-                        nl_buffer_format(ctx->buf, "if (");
+                        nl_buffer_format(ctx->buf, "if ((uint64_t) ");
                         FOREACH_N(i, 1, n->input_count) {
                             if (i != 1) nl_buffer_format(ctx->buf, ", ");
-                            c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                            c_fmt_ref_to_node(ctx, n->inputs[i]);
                         }
-                        nl_buffer_format(ctx->buf, " == %"PRIi64, br->keys[0]);
+                        nl_buffer_format(ctx->buf, " == (uint64_t) %"PRIi64, br->keys[0]);
                         nl_buffer_format(ctx->buf, ") {\n");
                         ctx->depth += 1;
                         c_fmt_branch_edge(ctx, succ[1], false);
@@ -745,7 +823,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     nl_buffer_format(ctx->buf, "switch ((uint64_t) ");
                     FOREACH_N(i, 1, n->input_count) {
                         if (i != 1) nl_buffer_format(ctx->buf, ", ");
-                        c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                        c_fmt_ref_to_node(ctx, n->inputs[i]);
                     }
                     nl_buffer_format(ctx->buf, ") {\n");
                     FOREACH_N(i, 1, br->succ_count) {
@@ -784,7 +862,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "return ");
                     FOREACH_N(i, 3, n->input_count) {
-                        c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                        c_fmt_ref_to_node(ctx, n->inputs[i]);
                     }
                     nl_buffer_format(ctx->buf, ";\n");
                 } else {
@@ -797,7 +875,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     FOREACH_N(i, 3, n->input_count) {
                         c_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
-                        c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                        c_fmt_ref_to_node(ctx, n->inputs[i]);
                         nl_buffer_format(ctx->buf, ";\n");
                         index += 1;
                     }
@@ -818,9 +896,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *src = n->inputs[n->input_count-1];
                 c_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "*(%s*) ", c_fmt_type_name(src->dt));
-                c_fmt_ref_to_node(ctx, dest, false);
+                c_fmt_ref_to_node(ctx, dest);
                 nl_buffer_format(ctx->buf, " = ", c_fmt_type_name(src->dt));
-                c_fmt_ref_to_node(ctx, src, false);
+                c_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -829,7 +907,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *src = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "~");
-                c_fmt_ref_to_node(ctx, src, false);
+                c_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -838,7 +916,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *src = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "-");
-                c_fmt_ref_to_node(ctx, src, false);
+                c_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -847,7 +925,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *src = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "*(%s*) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, src, false);
+                c_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -870,7 +948,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     nl_buffer_format(ctx->buf, "union {%s src; %s dest;} tmp;\n", c_fmt_type_name(src->dt), c_fmt_type_name(n->dt));
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tmp.src = ");
-                    c_fmt_ref_to_node(ctx, src, false);
+                    c_fmt_ref_to_node(ctx, src);
                     nl_buffer_format(ctx->buf, ";\n");
                     c_fmt_output(ctx, n);
                     nl_buffer_format(ctx->buf, "tmp.dest;\n");
@@ -880,7 +958,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 } else {
                     c_fmt_output(ctx, n);
                     nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                    c_fmt_ref_to_node(ctx, src, false);
+                    c_fmt_ref_to_node(ctx, src);
                     nl_buffer_format(ctx->buf, ";\n");
                 }
                 break;
@@ -890,9 +968,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " | ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -901,9 +981,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " ^ ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -911,9 +993,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " >> ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -921,9 +1005,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " >> ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -931,9 +1017,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " << ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -942,9 +1030,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " & ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -954,9 +1044,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " + ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -965,9 +1055,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " - ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -976,9 +1066,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " * ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -986,9 +1076,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " / ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -996,10 +1086,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(int64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " / (int64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " / ");
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1007,10 +1098,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(uint64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " / (uint64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " / ");
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1018,10 +1108,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(int64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " %% (int64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " %% ");
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1029,10 +1120,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(uint64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " %% (uint64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " %% ");
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1041,9 +1131,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " == ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1052,9 +1142,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " != ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1067,9 +1157,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " < ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1078,9 +1168,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " <= ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1090,10 +1180,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(int64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " < (int64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " < ");
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1102,10 +1193,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(int64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " <= (int64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " <= ");
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1115,10 +1207,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(uint64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " < (uint64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                nl_buffer_format(ctx->buf, " < ");
+                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1127,10 +1218,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(uint64_t) ");
-                c_fmt_ref_to_node(ctx, lhs, false);
-                nl_buffer_format(ctx->buf, " <= (uint64_t) ");
-                c_fmt_ref_to_node(ctx, rhs, false);
+                c_fmt_ref_to_node(ctx, lhs);
+                nl_buffer_format(ctx->buf, " <= ");
+                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
+                c_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1139,7 +1230,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *ptr = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "(void*) ((char *) ");
-                c_fmt_ref_to_node(ctx, ptr, false);
+                c_fmt_ref_to_node(ctx, ptr);
                 nl_buffer_format(ctx->buf, " + %"PRIi64, TB_NODE_GET_EXTRA_T(n, TB_NodeMember)->offset);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
@@ -1151,11 +1242,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *then = n->inputs[n->input_count-2];
                 TB_Node *els = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, cond, false);
+                c_fmt_ref_to_node(ctx, cond);
                 nl_buffer_format(ctx->buf, " ? ");
-                c_fmt_ref_to_node(ctx, then, false);
+                c_fmt_ref_to_node(ctx, then);
                 nl_buffer_format(ctx->buf, " : ");
-                c_fmt_ref_to_node(ctx, els, false);
+                c_fmt_ref_to_node(ctx, els);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1168,7 +1259,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *input = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, input, false);
+                c_fmt_ref_to_node(ctx, input);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1178,9 +1269,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *index = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "(void*) ((char *) ");
-                c_fmt_ref_to_node(ctx, ptr, false);
+                c_fmt_ref_to_node(ctx, ptr);
                 nl_buffer_format(ctx->buf, " + ");
-                c_fmt_ref_to_node(ctx, index, false);
+                c_fmt_ref_to_node(ctx, index);
                 nl_buffer_format(ctx->buf, " * %"PRIi64, TB_NODE_GET_EXTRA_T(n, TB_NodeArray)->stride);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
@@ -1232,7 +1323,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                         c_fmt_spaces(ctx);
                     }
                     nl_buffer_format(ctx->buf, "((tb2c_%s_v%u_t) ", ctx->name, n->gvn);
-                    c_fmt_ref_to_node(ctx, func, false);
+                    c_fmt_ref_to_node(ctx, func);
                     nl_buffer_format(ctx->buf, ")");
                     nl_buffer_format(ctx->buf, "(");
                     {
@@ -1242,7 +1333,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
-                                c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                                c_fmt_ref_to_node(ctx, n->inputs[i]);
                                 first = false;
                             }
                         }
@@ -1254,7 +1345,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "  tb2c_%s_v%u_ret_t ret = ", ctx->name, n->gvn);
                     nl_buffer_format(ctx->buf, "((v%u_t) ", n->gvn);
-                    c_fmt_ref_to_node(ctx, func, false);
+                    c_fmt_ref_to_node(ctx, func);
                     nl_buffer_format(ctx->buf, ")(");
                     {
                         bool first = true;
@@ -1263,7 +1354,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
-                                c_fmt_ref_to_node(ctx, n->inputs[i], false);
+                                c_fmt_ref_to_node(ctx, n->inputs[i]);
                                 first = false;
                             }
                         }
@@ -1288,11 +1379,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *len = n->inputs[n->input_count-1];
                 c_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "memcpy(");
-                c_fmt_ref_to_node(ctx, dest, false);
+                c_fmt_ref_to_node(ctx, dest);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, src, false);
+                c_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, len, false);
+                c_fmt_ref_to_node(ctx, len);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
             }
@@ -1303,11 +1394,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 TB_Node *c = n->inputs[n->input_count-1];
                 c_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "memset(");
-                c_fmt_ref_to_node(ctx, a, false);
+                c_fmt_ref_to_node(ctx, a);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, b, false);
+                c_fmt_ref_to_node(ctx, b);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, c, false);
+                c_fmt_ref_to_node(ctx, c);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
             }
@@ -1384,7 +1475,7 @@ TB_API char *tb_pass_c_prelude(TB_Module *mod) {
                     sym->symbol_id = 0;
                 }
                 if (g->obj_count == 0) {
-                    nl_buffer_format(buf, "uint8_t tb2c_sym%zu_%s[%zu];\n", sym->symbol_id, sym->name, g->size);
+                    nl_buffer_format(buf, "uint8_t tb2c_sym%zu_%s[%zu];\n", (size_t) sym->symbol_id, sym->name, (size_t) g->size);
                 } else {
                     uint8_t *data_buf = tb_platform_heap_alloc(sizeof(uint8_t) * g->size);
                     memset(data_buf, 0, sizeof(uint8_t) * g->size);
@@ -1394,7 +1485,7 @@ TB_API char *tb_pass_c_prelude(TB_Module *mod) {
                             memcpy(&data_buf[g->pos + g->objects[k].offset], g->objects[k].region.ptr, g->objects[k].region.size);
                         }
                     }
-                    nl_buffer_format(buf, "uint8_t %s[%zu] = {\n", sym->name, g->size);
+                    nl_buffer_format(buf, "uint8_t tb2c_sym%zu_%s[%zu] = {\n", (size_t) sym->symbol_id, sym->name, (size_t) g->size);
                     for (size_t i = 0; i < g->size; i++) {
                         nl_buffer_format(buf, "  0x%02x,\n", data_buf[i]);
                     }
@@ -1490,7 +1581,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
 
     ctx.return_block = opt->worklist.items[ctx.cfg.block_count - 1];
 
-    bool first = false;
     // TB_Node* end_bb = NULL;
     nl_hashset_put(&ctx.needed_blocks, opt->worklist.items[0]);
     while (true) {
@@ -1505,11 +1595,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
             if (nl_hashset_lookup(&ctx.needed_blocks, opt->worklist.items[i]) & NL_HASHSET_HIGH_BIT) {
                 if (!nl_hashset_put(&ctx.completed_blocks, opt->worklist.items[i])) {
                     continue;
-                }
-                if (!first) {
-                    c_fmt_ref_to_node(&ctx, opt->worklist.items[i], true);
-                } else {
-                    first = false;
                 }
                 ctx.depth += 1;
                 c_fmt_bb(&ctx, opt->worklist.items[i]);

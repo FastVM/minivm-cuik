@@ -89,6 +89,8 @@ end
 local cc = options.gcc and "gcc" or "clang"
 local ar = options.gcc and "ar"  or "llvm-ar"
 
+cflags = cflags .. " -DNDEBUG"
+
 if not options.debug then
 	cflags = cflags.." -O2 -DNDEBUG"
 	if not options.gcc then

@@ -131,10 +131,13 @@ class Tests:
 
     def cuik_to_c(self, infile: str, outfile: str) -> None:
         with open(outfile, 'w') as out_file:
+            start = time.time()
             subprocess.call(
                 ['bin/cuik', '-emit-c', infile, *self.args.xcuik],
                 stdout = out_file,
             )
+            end = time.time()
+            print(f'{int((end - start)*100000)/100}ms')
 
     def all(self) -> None:
         c_files = list(pathlib.Path(self.args.file_dir).rglob('*.c'))
@@ -163,7 +166,7 @@ class Tests:
             if cc_res == cuik_cc_res:
                 cc_msec = cc_res.run.seconds * 1000
                 cuik_cc_msec = cuik_cc_res.run.seconds * 1000
-                print(f'pass {test_name} (cuik -> {self.args.c}: {cuik_cc_msec:.1f}ms) ({self.args.c}: {cc_msec:.1f}ms)')
+                print(f'pass {test_name} (cuik -> {self.args.c}: {cuik_cc_msec:.1f}ms) ({self.args.c}: {cc_msec:.3f}ms)')
             else:
                 print('fail', test_name)
             
