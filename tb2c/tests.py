@@ -6,6 +6,7 @@ import tempfile
 import time
 import enum
 import dataclasses
+import shutil
 
 def default_test_dir() -> str:
     return str(pathlib.Path(__file__).parent.resolve() / 'tests')
@@ -63,21 +64,24 @@ class ArgMode(enum.Enum):
     FLAG_XCC = enum.auto()
     FLAG_XCUIK = enum.auto()
     FLAG_F = enum.auto()
+    FLAG_N = enum.auto()
 
 class ArgError(Exception):
     pass
 
 class Args:
     c: str
+    n: int
     xcc: str
     xcuik: str
     clean: bool
     file_dir: str
 
-    __slots__ = ('c', 'xcc', 'xcuik', 'clean', 'file_dir')
+    __slots__ = ('c', 'n', 'xcc', 'xcuik', 'clean', 'file_dir')
 
     def __init__(self, argv0: str, *args: list[str]):
         self.c = 'cc'
+        self.n = 1
         self.xcc = []
         self.xcuik = []
         self.clean = False
@@ -87,6 +91,8 @@ class Args:
             match mode:
                 case ArgMode.BASE:
                     match arg:
+                        case '-n':
+                            mode = ArgMode.FLAG_N
                         case '-c':
                             mode = ArgMode.FLAG_C
                         case '-Xcc':
@@ -94,13 +100,16 @@ class Args:
                         case '--no-clean':
                             self.clean = False
                         case '-f':
-                            mode = ArgError.FLAG_F
+                            mode = ArgMode.FLAG_F
                         case '--clean':
                             self.clean = True
                         case '-Xcuik':
                             mode = ArgMode.FLAG_XCUIK
                         case _:
                             raise ArgError(f'unknown arg: {arg}')
+                case ArgMode.FLAG_N:
+                    self.n = int(arg)
+                    mode = ArgMode.BASE
                 case ArgMode.FLAG_C:
                     self.c = arg
                     mode = ArgMode.BASE
@@ -131,13 +140,21 @@ class Tests:
 
     def cuik_to_c(self, infile: str, outfile: str) -> None:
         with open(outfile, 'w') as out_file:
-            start = time.time()
             subprocess.call(
                 ['bin/cuik', '-emit-c', infile, *self.args.xcuik],
                 stdout = out_file,
             )
-            end = time.time()
-            print(f'{int((end - start)*100000)/100}ms')
+
+    def repeat_cuik_to_c(self, infile: str, outfile: str, n: int):
+        if n == 0:
+            shutil.copy(infile, outfile)
+        elif n == 1:
+            self.cuik_to_c(infile, outfile)
+        else:
+            mid_path = f'{outfile}.tmp.c'
+            self.repeat_cuik_to_c(infile, mid_path, n = n-1)
+            self.cuik_to_c(mid_path, outfile)
+                
 
     def all(self) -> None:
         c_files = list(pathlib.Path(self.args.file_dir).rglob('*.c'))
@@ -146,11 +163,12 @@ class Tests:
             if test_file_path.parts[-1].endswith('.tmp.c'):
                 continue
             c_in = str(test_file_path)
-            c_out =  c_in.removesuffix('.c') + '.tmp.c'
+            c_out = c_in.removesuffix('.c') + '.tmp.c'
             self.tmp_files.append(c_out)
-            self.cuik_to_c(
+            self.repeat_cuik_to_c(
                 infile = c_in,
                 outfile = c_out,
+                n = self.args.n,
             )
             cc_res = CompileAndRun.cc(
                 cc = self.args.c,

@@ -105,6 +105,7 @@ end
 
 local src = {}
 
+local exe_ext, dll_ext, lib_ext
 if is_windows then
 	src[#src + 1] = "c11threads/threads_msvc.c"
 	cflags = cflags.." -I c11threads -D_CRT_SECURE_NO_WARNINGS"
@@ -194,7 +195,7 @@ for k,v in pairs(options) do
 end
 
 -- generate ninja files
-ninja = io.open("build.ninja", "wb")
+local ninja = io.open("build.ninja", "wb")
 
 local function rule(name, content)
 	ninja:write("rule "..name.."\n")

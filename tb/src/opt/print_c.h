@@ -5,9 +5,11 @@
 
 typedef struct nl_buffer_t nl_buffer_t;
 
-nl_buffer_t *nl_buffer_new(void);
+nl_buffer_t *nl_buffer_new(void *arena);
+
 void nl_buffer_format(nl_buffer_t *buf, const char *fmt, ...);
 char *nl_buffer_get(nl_buffer_t *buf);
+char *nl_buffer_copy(nl_buffer_t *buf);
 
 typedef struct {
     size_t gvn;
@@ -41,10 +43,10 @@ typedef struct {
     NL_HashSet needed_blocks;
     DynArray(size_t) declared_vars;
     nl_buffer_t *globals;
-    nl_buffer_t *args;
     nl_buffer_t *pre;
     nl_buffer_t *buf;
     TB_Node *return_block;
+    void *arena;
     ptrdiff_t loop_goes_to;
     int depth;
 } CFmtState;
@@ -577,69 +579,70 @@ TB_Node *c_fmt_only_return(CFmtState *ctx, TB_Node *target) {
 static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
     TB_Node* target = fallthru ? cfg_next_control(n) : cfg_next_bb_after_cproj(n);
 
-    TB_Node *node = c_fmt_only_return(ctx, target);
-    if (node != NULL) {
-        int phi_i = -1;
-        FOR_USERS(u, n) {
-            if (u->n->type == TB_REGION) {
-                phi_i = 1 + u->slot;
-                break;
-            }
-        }
+    // TB_Node *node = c_fmt_only_return(ctx, target);
+    // if (node != NULL) {
+    //     int phi_i = -1;
+    //     FOR_USERS(u, n) {
+    //         if (u->n->type == TB_REGION) {
+    //             phi_i = 1 + u->slot;
+    //             break;
+    //         }
+    //     }
 
-        NL_Table table = nl_table_alloc(4);
-        FOR_USERS(u, target) {
-            if (u->n->inputs[phi_i] != NULL) {
-                if (u->n->inputs[phi_i]->dt.type != TB_CONTROL && u->n->inputs[phi_i]->dt.type != TB_MEMORY) {
-                    nl_table_put(&table, u->n, u->n->inputs[phi_i]);
-                }
-            }
-        }
-        size_t count = 0;
-        FOREACH_N(i, 3, node->input_count) {
-            count += 1;
-        }
-        if (count == 0) {
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "return;\n");
-            return;
-        } else if (count == 1) {
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "return ");
-            FOREACH_N(i, 3, node->input_count) {
-                TB_Node *ent = nl_table_get(&table, node->inputs[i]);
-                if (ent == NULL) {
-                    ent = node->inputs[i];
-                }
-                c_fmt_ref_to_node(ctx, ent);
-            }
-            nl_buffer_format(ctx->buf, ";\n");
-            return;
-        } else {
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "{\n");
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "  tb2c_%s_ret_t ret;\n", ctx->name);
+    //     NL_Table table = nl_table_alloc(4);
+    //     FOR_USERS(u, target) {
+    //         if (phi_i >= u->n->input_count) {
+    //             continue;
+    //         }
+    //         if (u->n->inputs[phi_i]->dt.type != TB_CONTROL && u->n->inputs[phi_i]->dt.type != TB_MEMORY) {
+    //             nl_table_put(&table, u->n, u->n->inputs[phi_i]);
+    //         }
+    //     }
+    //     size_t count = 0;
+    //     FOREACH_N(i, 3, node->input_count) {
+    //         count += 1;
+    //     }
+    //     if (count == 0) {
+    //         c_fmt_spaces(ctx);
+    //         nl_buffer_format(ctx->buf, "return;\n");
+    //         return;
+    //     } else if (count == 1) {
+    //         c_fmt_spaces(ctx);
+    //         nl_buffer_format(ctx->buf, "return ");
+    //         FOREACH_N(i, 3, node->input_count) {
+    //             TB_Node *ent = nl_table_get(&table, node->inputs[i]);
+    //             if (ent == NULL) {
+    //                 ent = node->inputs[i];
+    //             }
+    //             c_fmt_ref_to_node(ctx, ent);
+    //         }
+    //         nl_buffer_format(ctx->buf, ";\n");
+    //         return;
+    //     } else {
+    //         c_fmt_spaces(ctx);
+    //         nl_buffer_format(ctx->buf, "{\n");
+    //         c_fmt_spaces(ctx);
+    //         nl_buffer_format(ctx->buf, "  tb2c_%s_ret_t ret;\n", ctx->name);
             
-            bool index = 0;
-            FOREACH_N(i, 3, n->input_count) {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
-                TB_Node *ent = nl_table_get(&table, node->inputs[i]);
-                if (ent == NULL) {
-                    ent = node->inputs[i];
-                }
-                c_fmt_ref_to_node(ctx, ent);
-                nl_buffer_format(ctx->buf, ";\n");
-                index += 1;
-            }
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "  return ret;\n");
-            c_fmt_spaces(ctx);
-            nl_buffer_format(ctx->buf, "}\n");
-            return;
-        }
-    }
+    //         bool index = 0;
+    //         FOREACH_N(i, 3, n->input_count) {
+    //             c_fmt_spaces(ctx);
+    //             nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
+    //             TB_Node *ent = nl_table_get(&table, node->inputs[i]);
+    //             if (ent == NULL) {
+    //                 ent = node->inputs[i];
+    //             }
+    //             c_fmt_ref_to_node(ctx, ent);
+    //             nl_buffer_format(ctx->buf, ";\n");
+    //             index += 1;
+    //         }
+    //         c_fmt_spaces(ctx);
+    //         nl_buffer_format(ctx->buf, "  return ret;\n");
+    //         c_fmt_spaces(ctx);
+    //         nl_buffer_format(ctx->buf, "}\n");
+    //         return;
+    //     }
+    // }
 
     // print phi args
     if (target->type == TB_REGION) {
@@ -724,7 +727,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
     size_t declared_vars_length = dyn_array_length(ctx->declared_vars);
 
     nl_buffer_t *old_buf = ctx->buf;
-    ctx->buf = nl_buffer_new();
+    ctx->buf = nl_buffer_new(ctx->arena);
 
     dyn_array_put(ctx->visited_blocks, &frame);
 
@@ -774,20 +777,22 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
 
             case TB_BRANCH: {
                 TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
-                TB_ArenaSavepoint sp = tb_arena_save(tmp_arena);
-                TB_Node** restrict succ = tb_arena_alloc(tmp_arena, br->succ_count * sizeof(TB_Node**));
+                TB_Node** restrict succ = tb_arena_alloc(ctx->arena, br->succ_count * sizeof(TB_Node**));
+
+                size_t succ_count = 0;
 
                 // fill successors
                 FOR_USERS(u, n) {
                     if (u->n->type == TB_PROJ) {
                         int index = TB_NODE_GET_EXTRA_T(u->n, TB_NodeProj)->index;
                         succ[index] = u->n;
+                        succ_count += 1;
                     }
                 }
 
-                if (br->succ_count == 1) {
+                if (succ_count == 1) {
                     c_fmt_branch_edge(ctx, succ[0], false);
-                } else if (br->succ_count == 2) {
+                } else if (succ_count == 2) {
                     if (br->keys[0] == 0) {
                         c_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "if (");
@@ -826,7 +831,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                         c_fmt_ref_to_node(ctx, n->inputs[i]);
                     }
                     nl_buffer_format(ctx->buf, ") {\n");
-                    FOREACH_N(i, 1, br->succ_count) {
+                    FOREACH_N(i, 1, succ_count) {
                         c_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "case %"PRIi64"llu:\n", br->keys[i-1]);
                         ctx->depth += 1;
@@ -1450,7 +1455,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
 TB_API char *tb_pass_c_prelude(TB_Module *mod) {
     size_t n_private_syms = 0;
 
-    nl_buffer_t *buf = nl_buffer_new();
+    void *arena = tb_arena_create(TB_ARENA_MEDIUM_CHUNK_SIZE);
+
+    nl_buffer_t *buf = nl_buffer_new(arena);
     
     nl_buffer_format(buf, "#include <stdint.h>\n");
     nl_buffer_format(buf, "#include <string.h>\n");
@@ -1540,7 +1547,11 @@ TB_API char *tb_pass_c_prelude(TB_Module *mod) {
         }
     }
 
-    return nl_buffer_get(buf);
+    char *ret = nl_buffer_get(buf);
+
+    // tb_arena_destroy(arena);
+
+    return ret;
 }
 
 TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
@@ -1553,10 +1564,12 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
     worklist_alloc(&tmp_ws, f->node_count);
 
     CFmtState ctx = { name, opt, f, f->super.module };
+    
+    ctx.arena = tb_arena_create(TB_ARENA_MEDIUM_CHUNK_SIZE);
 
-    ctx.globals = nl_buffer_new();
-    ctx.args = nl_buffer_new();
-    ctx.buf = nl_buffer_new();
+    ctx.globals = nl_buffer_new(ctx.arena);
+
+    ctx.buf = nl_buffer_new(ctx.arena);
 
     // ctx.global_funcs = nl_hashset_alloc(ctx.module->compiled_function_count);
     ctx.visited_blocks = dyn_array_create(size_t, 8);
@@ -1573,7 +1586,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
     // does the IR printing need smart scheduling lol (yes... when we're testing things)
     ctx.sched = greedy_scheduler;
 
-    TB_ArenaSavepoint sp = tb_arena_save(tmp_arena);
 
     // schedule nodes
     tb_pass_schedule(opt, ctx.cfg, false);
@@ -1614,7 +1626,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
     //     ctx.depth -= 1;
     // }
 
-    tb_arena_restore(tmp_arena, sp);
     worklist_free(&opt->worklist);
     // tb_free_cfg(&ctx.cfg);
     opt->worklist = old;
@@ -1622,7 +1633,7 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
     opt->error_n = NULL;
     cuikperf_region_end();
 
-    nl_buffer_t *buf = nl_buffer_new();
+    nl_buffer_t *buf = nl_buffer_new(ctx.arena);
 
     nl_buffer_format(buf, "%s\n", nl_buffer_get(ctx.globals));
     nl_buffer_format(buf, "tb2c_%s_ret_t %s(", name, name);
@@ -1646,5 +1657,9 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
 
     dyn_array_destroy(ctx.visited_blocks);
 
-    return nl_buffer_get(buf);
+    char *ret = nl_buffer_get(buf);
+
+    // tb_arena_destroy(ctx.arena);
+
+    return ret;
 }
