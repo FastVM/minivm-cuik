@@ -1,5 +1,50 @@
 #include <stddef.h>
+#include <stdint.h>
 
+typedef struct {
+    int type : 3;
+    int val  : 29;
+} Ref;
+
+/* void foo(int n, int* arr) {
+    for (int i = 0; i < 2; i++) {
+        arr[i] += 1;
+    }
+} */
+
+void matmul(float* c, float* a, float* b) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += a[k*4 + i] * b[j*4 + k];
+            }
+            c[j*4 + i] = sum;
+        }
+    }
+}
+
+#if 0
+int ref_eq(Ref a, Ref b) {
+    return a.type == b.type && a.val == b.val;
+}
+
+void foo(uint64_t* dst) {
+    *dst += 5;
+}
+#elif 0
+void foo(int n, int* arr) {
+    for (int i = 2; i < n; i++) {
+        if (arr[n] != 0) {
+            arr[0] += arr[i];
+        } else {
+            arr[1] += 1;
+        }
+    }
+}
+#endif
+
+#if 0
 int  stuff_a();
 void stuff_b();
 void stuff_c();
@@ -40,7 +85,6 @@ int main() {
     return ***ptr_ptr_ptr_iter;
 }
 
-#if 0
 void foo() {
     int x=1;
     if( false ) {
