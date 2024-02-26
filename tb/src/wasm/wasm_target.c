@@ -530,7 +530,6 @@ static WasmElem* do_dom_tree(Ctx* ctx, DomTree* node) {
                 new_e->_then = last;
                 last = kid->elem = new_e;
             } else {
-                __debugbreak();
                 last = kid->elem;
             }
         }
@@ -780,7 +779,7 @@ static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict 
 
     // TODO(NeGate): move the assembly output to code arena
     if (emit_asm) CUIK_TIMED_BLOCK("dissassembly") {
-        __debugbreak();
+        // __debugbreak();
     }
 
     log_debug("%s: code_arena=%.1f KiB", f->super.name, tb_arena_current_size(code_arena) / 1024.0f);

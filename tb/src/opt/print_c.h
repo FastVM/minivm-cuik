@@ -793,7 +793,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                 if (succ_count == 1) {
                     c_fmt_branch_edge(ctx, succ[0], false);
                 } else if (succ_count == 2) {
-                    if (br->keys[0] == 0) {
+                    if (br->keys[0].key == 0) {
                         c_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "if (");
                         FOREACH_N(i, 1, n->input_count) {
@@ -814,7 +814,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                             if (i != 1) nl_buffer_format(ctx->buf, ", ");
                             c_fmt_ref_to_node(ctx, n->inputs[i]);
                         }
-                        nl_buffer_format(ctx->buf, " == (uint64_t) %"PRIi64, br->keys[0]);
+                        nl_buffer_format(ctx->buf, " == (uint64_t) %"PRIi64, br->keys[0].key);
                         nl_buffer_format(ctx->buf, ") {\n");
                         ctx->depth += 1;
                         c_fmt_branch_edge(ctx, succ[1], false);
@@ -833,7 +833,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     nl_buffer_format(ctx->buf, ") {\n");
                     FOREACH_N(i, 1, succ_count) {
                         c_fmt_spaces(ctx);
-                        nl_buffer_format(ctx->buf, "case %"PRIi64"llu:\n", br->keys[i-1]);
+                        nl_buffer_format(ctx->buf, "case %"PRIi64"llu:\n", br->keys[i-1].key);
                         ctx->depth += 1;
                         c_fmt_branch_edge(ctx, succ[i], false);
                         ctx->depth -= 1;
@@ -1604,15 +1604,13 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
             //     continue;
             // }
 
-            if (nl_hashset_lookup(&ctx.needed_blocks, opt->worklist.items[i]) & NL_HASHSET_HIGH_BIT) {
-                if (!nl_hashset_put(&ctx.completed_blocks, opt->worklist.items[i])) {
-                    continue;
-                }
-                ctx.depth += 1;
-                c_fmt_bb(&ctx, opt->worklist.items[i]);
-                ctx.depth -= 1;
-                any = true;
+            if (!nl_hashset_put(&ctx.completed_blocks, opt->worklist.items[i])) {
+                continue;
             }
+            ctx.depth += 1;
+            c_fmt_bb(&ctx, opt->worklist.items[i]);
+            ctx.depth -= 1;
+            any = true;
         }
         if (!any) {
             break;

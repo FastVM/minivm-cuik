@@ -150,10 +150,6 @@ static bool indvar_strength_reduction(TB_Passes* p, TB_Node* phi, TB_Node* cond,
     uint64_t* init = iconst(phi->inputs[1]);
     uint64_t* end = end_cond ? iconst(end_cond) : NULL;
 
-    if (init && end) {
-        __debugbreak();
-    }
-
     return false;
 }
 

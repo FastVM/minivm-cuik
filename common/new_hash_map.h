@@ -27,7 +27,6 @@ void nl_hashset_free(NL_HashSet hs);
 void nl_hashset_clear(NL_HashSet* restrict hs);
 bool nl_hashset_remove(NL_HashSet* restrict hs, void* ptr);
 void* nl_hashset_put(NL_HashSet* restrict hs, void* ptr);
-size_t nl_hashset_lookup(NL_HashSet* restrict hs, void* ptr);
 
 void* nl_hashset_get2(NL_HashSet* restrict hs, void* ptr, NL_HashFunc hash, NL_CompareFunc cmp);
 
