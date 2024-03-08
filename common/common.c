@@ -229,13 +229,13 @@ size_t tb_arena_current_size(TB_Arena* arena) {
 ////////////////////////////////
 // Futex functions
 ////////////////////////////////
+
+#ifdef __linux__
 void futex_dec(Futex* f) {
     if (atomic_fetch_sub(f, 1) == 1) {
         futex_signal(f);
     }
 }
-
-#ifdef __linux__
 #include <errno.h>
 #include <linux/futex.h>
 #include <sys/syscall.h>
@@ -370,10 +370,10 @@ void futex_wait(Futex* addr, Futex val) {
         if (*addr != val) break;
     }
 }
-#endif
 
 void futex_wait_eq(Futex* addr, Futex val) {
     while (*addr != val) {
         futex_wait(addr, *addr);
     }
 }
+#endif

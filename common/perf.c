@@ -59,12 +59,17 @@ static uint64_t get_rdtsc_freq(void) {
 }
 #else
 #include <sys/mman.h>
+#if defined(__linux__)
 #include <linux/perf_event.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 #include <x86intrin.h>
 
 static uint64_t get_rdtsc_freq(void) {
+    uint64_t tsc_freq = 0;
+
+#if defined(__linux__)
     // Fast path: Load kernel-mapped memory page
     struct perf_event_attr pe = {0};
     pe.type = PERF_TYPE_HARDWARE;
@@ -73,8 +78,6 @@ static uint64_t get_rdtsc_freq(void) {
     pe.disabled = 1;
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
-
-    uint64_t tsc_freq = 0;
 
     // __NR_perf_event_open == 298 (on x86_64)
     int fd = syscall(298, &pe, 0, -1, -1, 0);
@@ -96,18 +99,19 @@ static uint64_t get_rdtsc_freq(void) {
         }
         close(fd);
     }
+#endif
 
     // Slow path
     if (!tsc_freq) {
 
         // Get time before sleep
-        uint64_t nsc_begin = 0; { struct timespec t; if (!clock_gettime(CLOCK_MONOTONIC_RAW, &t)) nsc_begin = (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
+        uint64_t nsc_begin = 0; { struct timespec t; if (!clock_gettime(CLOCK_MONOTONIC, &t)) nsc_begin = (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
         uint64_t tsc_begin = __rdtsc();
 
         usleep(10000); // 10ms gives ~4.5 digits of precision - the longer you sleep, the more precise you get
 
         // Get time after sleep
-        uint64_t nsc_end = nsc_begin + 1; { struct timespec t; if (!clock_gettime(CLOCK_MONOTONIC_RAW, &t)) nsc_end = (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
+        uint64_t nsc_end = nsc_begin + 1; { struct timespec t; if (!clock_gettime(CLOCK_MONOTONIC, &t)) nsc_end = (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
         uint64_t tsc_end = __rdtsc();
 
         // Do the math to extrapolate the RDTSC ticks elapsed in 1 second
@@ -165,7 +169,7 @@ void cuikperf_thread_start(void) {
     #if _WIN32
     uint32_t tid = GetCurrentThreadId();
     #else
-    uint32_t tid = pthread_self();
+    uint32_t tid = (size_t) pthread_self();
     #endif
 
     if (profiling) {
@@ -201,7 +205,7 @@ void cuikperf_region_start(const char* label, const char* extra) {
         #if _WIN32
         uint32_t tid = GetCurrentThreadId();
         #else
-        uint32_t tid = pthread_self();
+        uint32_t tid = (size_t) pthread_self();
         #endif
 
         spall_buffer_begin_args(&ctx, &muh_buffer, label, strlen(label), extra, extra ? strlen(extra) : 0, nanos, tid, 0);
@@ -217,7 +221,7 @@ void cuikperf_region_end(void) {
         #if _WIN32
         uint32_t tid = GetCurrentThreadId();
         #else
-        uint32_t tid = pthread_self();
+        uint32_t tid = (size_t) pthread_self();
         #endif
 
         spall_buffer_end_ex(&ctx, &muh_buffer, nanos, tid, 0);
