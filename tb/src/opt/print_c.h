@@ -860,6 +860,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     }
                     nl_buffer_format(ctx->buf, ");\n");
                     c_fmt_spaces(ctx);
+                    nl_buffer_format(ctx->buf, "{\n");
+                    ctx->depth += 1;
+                    c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tb2c_%s_ret_t ret;\n", ctx->name);
                     size_t index = 0;
                     FOREACH_N(i, 0, nrets) {
@@ -869,6 +872,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Node* bb_start) {
                     }
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "return (tb2c_%s_ret_t) ret;\n", ctx->name);
+                    ctx->depth -= 1;
+                    c_fmt_spaces(ctx);
+                    nl_buffer_format(ctx->buf, "}\n");
                 }
                 break;
             }
