@@ -448,12 +448,12 @@ typedef enum TB_NodeTypeEnum {
     // in any other context.
     TB_MACH_PROJ, // (T) & Index -> T
 
-    // limit on generic nodes
-    TB_NODE_TYPE_MAX,
-
     // each family of machine nodes gets 256 nodes
     // first machine op, we have some generic ops here:
     TB_MACH_X86 = TB_ARCH_X86_64 * 0x100,
+
+    // limit on generic nodes
+    TB_NODE_TYPE_MAX = TB_ARCH_MAX * 0x100,
 } TB_NodeTypeEnum;
 typedef uint16_t TB_NodeType;
 static_assert(sizeof(TB_NODE_TYPE_MAX) < 0x100, "this is the bound where machine nodes start");
@@ -887,7 +887,7 @@ TB_API TB_Safepoint* tb_safepoint_get(TB_Function* f, uint32_t relative_ip);
 ////////////////////////////////
 typedef struct TB_JIT TB_JIT;
 
-#ifdef EMSCRIPTEN
+#ifdef TB_EMSCRIPTEN
 TB_API void* tb_jit_wasm_obj(TB_Arena* arena, TB_Function* f);
 #else
 typedef struct TB_CPUContext TB_CPUContext;

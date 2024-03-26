@@ -457,7 +457,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
 
 static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
     size_t declared_vars_length = dyn_array_length(&ctx->declared_vars);
-    nl_buffer_format(ctx->buf, "bb%u:\n", bb_start->gvn);
+    nl_buffer_format(ctx->buf, "bb%u:;\n", bb_start->gvn);
 
     TB_BasicBlock* bb = ctx->f->scheduled[bb_start->gvn];
     CFmtBlockRange *range = c_fmt_get_block_range(ctx, ws, bb_start);
@@ -560,13 +560,13 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     nl_buffer_format(ctx->buf, ") {\n");
                     FOR_N(i, 1, succ_count) {
                         c_fmt_spaces(ctx);
-                        nl_buffer_format(ctx->buf, "case %"PRIi64"llu:\n", br->keys[i-1].key);
+                        nl_buffer_format(ctx->buf, "case %"PRIi64"llu:;\n", br->keys[i-1].key);
                         ctx->depth += 1;
                         c_fmt_branch_edge(ctx, succ[i], false);
                         ctx->depth -= 1;
                     }
                     c_fmt_spaces(ctx);
-                    nl_buffer_format(ctx->buf, "default:\n");
+                    nl_buffer_format(ctx->buf, "default:;\n");
                     ctx->depth += 1;
                     c_fmt_branch_edge(ctx, succ[0], false);
                     ctx->depth -= 1;

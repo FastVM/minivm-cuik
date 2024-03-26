@@ -97,6 +97,7 @@ static TB_MultiplyResult tb_mul64x128(uint64_t a, uint64_t b) {
 }
 
 static uint64_t tb_div128(uint64_t ahi, uint64_t alo, uint64_t b) {
+#if defined(__x86_64__)
     // We don't want 128 bit software division
     uint64_t d, e;
     __asm__("divq %[b]"
@@ -104,5 +105,11 @@ static uint64_t tb_div128(uint64_t ahi, uint64_t alo, uint64_t b) {
         : [b] "r"(b), "a"(alo), "d"(ahi)
     );
     return d;
+#else
+    __uint128_t x = alo;
+    x <<= 64;
+    x |= ahi;
+    return x / b;
+#endif
 }
 #endif

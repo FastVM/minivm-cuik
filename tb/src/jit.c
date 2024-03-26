@@ -1,7 +1,7 @@
 #include "tb_internal.h"
 #include "host.h"
 
-#ifdef EMSCRIPTEN
+#ifdef TB_EMSCRIPTEN
 void* tb_jit_wasm_obj(TB_Arena* arena, TB_Function* f) {
     TB_Arena* arena = get_temporary_arena(m);
     TB_ArenaSavepoint sp = tb_arena_save(arena);
