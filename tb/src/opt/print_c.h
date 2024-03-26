@@ -1613,7 +1613,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
     // does the IR printing need smart scheduling lol (yes... when we're testing things)
     ctx.sched = greedy_scheduler;
 
-
     // schedule nodes
     tb_pass_schedule(opt, ctx.cfg, false);
     worklist_clear_visited(&opt->worklist);
@@ -1630,7 +1629,6 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
     opt->worklist = old;
     opt->scheduled = NULL;
     opt->error_n = NULL;
-    cuikperf_region_end();
 
     nl_buffer_t *buf = nl_buffer_new();
 
@@ -1659,6 +1657,7 @@ TB_API char *tb_pass_c_fmt(TB_Passes* opt) {
 
     char *ret = nl_buffer_get(buf);
 
+    cuikperf_region_end();
     // tb_arena_destroy(ctx.arena);
 
     return ret;

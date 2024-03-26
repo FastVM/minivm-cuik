@@ -104,7 +104,7 @@ TB_Module* tb_module_create_for_host(bool is_jit) {
     TB_Arch arch = TB_ARCH_X86_64;
     #else
     TB_Arch arch = TB_ARCH_UNKNOWN;
-    tb_panic("tb_module_create_for_host: cannot detect host platform");
+    // tb_panic("tb_module_create_for_host: cannot detect host platform");
     #endif
 
     #if defined(TB_HOST_WINDOWS)
@@ -112,6 +112,8 @@ TB_Module* tb_module_create_for_host(bool is_jit) {
     #elif defined(TB_HOST_OSX)
     TB_System sys = TB_SYSTEM_MACOS;
     #elif defined(TB_HOST_LINUX)
+    TB_System sys = TB_SYSTEM_LINUX;
+    #elif defined(EMSCRIPTEN)
     TB_System sys = TB_SYSTEM_LINUX;
     #else
     tb_panic("tb_module_create_for_host: cannot detect host platform");
