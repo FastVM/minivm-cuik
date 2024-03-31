@@ -155,7 +155,7 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
 
             int base = aarray_length(ctx->vregs);
             FOR_N(j, 0, count) {
-                RegMask* mask = intern_regmask(ctx, i, false, 1ull << j);
+                RegMask* mask = intern_regmask(ctx, i, false, i == 0 ? j : 1ull << j);
                 aarray_push(ctx->vregs, (VReg){
                         .class = i,
                         .assigned = j,
@@ -212,7 +212,9 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
 
                     VReg* in_def = node_vreg(ctx, in);
                     int hint = fixed_reg_mask(in_mask);
-                    if (hint >= 0) { in_def->hint_vreg = ra.fixed[in_mask->class] + hint; }
+                    if (hint >= 0 && in_def->mask->class == in_mask->class) {
+                        in_def->hint_vreg = ra.fixed[in_mask->class] + hint;
+                    }
 
                     // we resolve def-use conflicts with a spill move, either when:
                     //   * the use and def classes don't match.
@@ -223,12 +225,6 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
                         RegMask* in_def_mask = in_def->mask;
                         if (both_fixed) {
                             in_def_mask = ctx->normie_mask[in_def->mask->class];
-                        }
-
-                        // unless we're writing to a stack slot, we can basically always
-                        // do the spill move as a load.
-                        if (in_def_mask->class != REG_CLASS_STK) {
-                            in_def_mask = intern_regmask(ctx, in_def->mask->class, true, in_def->mask->mask[0]);
                         }
 
                         TB_OPTDEBUG(REGALLOC)(printf("  TEMP "), tb__print_regmask(in_def_mask), printf(" -> "), tb__print_regmask(in_mask), printf("\n"));
@@ -242,6 +238,7 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
                         // schedule the split right before use
                         tb__insert_before(ctx, f, tmp, n);
                         if (hint >= 0) {
+                            assert(hint < ctx->num_regs[in_mask->class]);
                             int fixed_vreg = ra.fixed[in_mask->class] + hint;
                             aarray_insert(ctx->vreg_map, tmp->gvn, fixed_vreg);
                         } else {
@@ -415,6 +412,11 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
                         add_range(&ra, in_def, bb_start, use_time);
                         // add_use_pos(&ra, in_def, use_time, in_mask->may_spill);
                     }
+
+                    if (n->type == TB_MACH_MOVE) {
+                        TB_Node* in = n->inputs[1];
+                        ctx->vregs[ctx->vreg_map[in->gvn]].hint_vreg = vreg_id;
+                    }
                 }
             }
         }
@@ -482,10 +484,11 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
                     move_to_active(&ra, vreg, vreg_id);
                 }
             } else if (vreg->mask->may_spill) {
-                // allocate stack slo t
+                // allocate stack slot
+                ctx->num_spills += 1;
                 TB_OPTDEBUG(REGALLOC)(printf("  #   assign to [BP - %d]\n", 8 + ctx->num_spills*8));
                 vreg->class    = REG_CLASS_STK;
-                vreg->assigned = STACK_BASE_REG_NAMES + ctx->num_spills++;
+                vreg->assigned = STACK_BASE_REG_NAMES + ctx->num_spills;
             } else {
                 // not spillable, not colorable in regs... wtf are you
                 abort();
@@ -506,8 +509,35 @@ void tb__lsra(Ctx* restrict ctx, TB_Arena* arena) {
             }
             #endif
         }
-        cuikperf_region_end();
     }
+
+    /*CUIK_TIMED_BLOCK("move resolver") {
+        FOR_N(i, 0, ctx->bb_count) {
+            MachineBB* mbb = &ctx->machine_bbs[i];
+            TB_Node* end_node = mbb->end_n;
+            bool is_mbb_spill = mbb->end_time >= pos;
+
+            for (User* u = end_node->users; u; u = u->next) {
+                if (cfg_is_control(u->n) && !cfg_is_endpoint(u->n)) {
+                    TB_Node* succ = end_node->type == TB_BRANCH ? cfg_next_bb_after_cproj(u->n) : u->n;
+                    MachineBB* target = node_to_bb(ctx, succ);
+                    bool is_target_spill = target->start_time >= pos;
+
+                    uintptr_t fwd = (uintptr_t) nl_table_get(&ra.fwd_table, (void*) n->gvn);
+                    uintptr_t gvn = fwd ? fwd : n->gvn;
+
+                    if (set_get(target->live_in, gvn) && is_mbb_spill != is_target_spill) {
+                        if (is_mbb_spill) { // REG -> SPILL is done at the target's start
+
+                        } else {            // SPILL -> REG is done at the source's end
+                        }
+                    }
+                    __debugbreak();
+                }
+            }
+        }
+    }*/
+
     nl_table_free(ra.fwd_table);
     // dump_sched(ctx);
 }
@@ -646,9 +676,10 @@ static int allocate_blocked_reg(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg
     RegMask* spill_rm = ctx->has_flags && class == 1 ? ctx->normie_mask[2] : intern_regmask(ctx, 1, true, 0);
     if (first_use > pos) {
         // spill interval
+        ctx->num_spills += 1;
         TB_OPTDEBUG(REGALLOC)(printf("  #   assign to [BP - %d]\n", 8 + ctx->num_spills*8));
         vreg->class    = REG_CLASS_STK;
-        vreg->assigned = STACK_BASE_REG_NAMES + ctx->num_spills++;
+        vreg->assigned = STACK_BASE_REG_NAMES + ctx->num_spills;
 
         // split before first use that requires a register
         int earliest = INT_MAX;
@@ -725,28 +756,6 @@ static int allocate_free_reg(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg, i
     if (UNLIKELY(pos == 0)) {
         // ok let's steal a blocked reg, one that's not fixed
         return allocate_blocked_reg(ctx, ra, vreg, vreg_id);
-
-        /*int reg = -1;
-        FOR_N(i, 0, ra->num_regs[rc]) {
-            if (set_get(&ra->active_set[rc], i) && !vreg_is_fixed(ctx, ra, ra->active[rc][i])) {
-                reg = i;
-                break;
-            }
-        }
-        assert(reg >= 0 && "no way they're all in fixed-use lmao");
-
-        int active_id = ra->active[rc][reg];
-        TB_OPTDEBUG(REGALLOC)(printf("  #   spill v%u\n", vreg_id));
-
-        // alloc failure, split any
-        VReg* active_user = &ctx->vregs[active_id];
-
-        // HACK(NeGate): FLAGS can't spill to the stack so we'll just still to GPRs which we're
-        // assuming to be in slot 2
-        RegMask* spill_rm = ctx->has_flags && rc == 1 ? ctx->normie_mask[2] : intern_regmask(ctx, 1, true, 0);
-        // spill_entire_life(ctx, ra, active_user, spill_rm);
-        split_intersecting(ctx, ra, active_user, spill_rm, vreg_start(ctx, vreg_id) + 1);
-        return reg;*/
     } else if (vreg->end_time <= pos) {
         // we can steal it completely
         TB_OPTDEBUG(REGALLOC)(printf("  #   assign to "), print_reg_name(rc, highest));
@@ -774,7 +783,7 @@ static int allocate_free_reg(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg, i
         // steal the reg
         RegMask* spill_rm = ctx->has_flags && rc == 1 ? ctx->normie_mask[2] : intern_regmask(ctx, 1, true, 0);
         // spill_entire_life(ctx, ra, vreg, spill_rm);
-        split_intersecting(ctx, ra, vreg, spill_rm, pos + 1);
+        split_intersecting(ctx, ra, vreg, spill_rm, pos);
         return highest;
     }
 }
@@ -969,7 +978,7 @@ static bool rematerialize(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg, int 
         TB_Node* use_n = USERN(u);
         int use_i      = USERI(u);
         RegMask* in_mask = constraint_in(ctx, use_n, use_i);
-        if (ra->time[use_n->gvn] >= pos) {
+        if (ra->time[use_n->gvn] >= pos && in_mask != &TB_REG_EMPTY) {
             // reload per use site
             TB_Node* reload_n = tb_alloc_node(f, TB_INTEGER_CONST, n->dt, 1, sizeof(TB_NodeInt));
             set_input(f, use_n, reload_n, use_i);
@@ -1116,34 +1125,6 @@ static VReg* split_intersecting(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg
     assert(vreg->active_range != &NULL_RANGE);
     assert(spill_vreg->active_range != &NULL_RANGE);
     vreg = NULL;
-
-    // identify where phis need to be placed
-    #if 0
-    FOR_N(i, 0, ctx->bb_count) {
-        MachineBB* mbb = &ctx->machine_bbs[i];
-        TB_Node* end_node = mbb->end_n;
-        bool is_mbb_spill = mbb->end_time >= pos;
-
-        for (User* u = end_node->users; u; u = u->next) {
-            if (cfg_is_control(u->n) && !cfg_is_endpoint(u->n)) {
-                TB_Node* succ = end_node->type == TB_BRANCH ? cfg_next_bb_after_cproj(u->n) : u->n;
-                MachineBB* target = node_to_bb(ctx, succ);
-                bool is_target_spill = target->start_time >= pos;
-
-                uintptr_t fwd = (uintptr_t) nl_table_get(&ra.fwd_table, (void*) n->gvn);
-                uintptr_t gvn = fwd ? fwd : n->gvn;
-
-                if (set_get(target->live_in, gvn) && is_mbb_spill != is_target_spill) {
-                    if (is_mbb_spill) { // REG -> SPILL is done at the target's start
-
-                    } else {            // SPILL -> REG is done at the source's end
-                    }
-                }
-                __debugbreak();
-            }
-        }
-    }
-    #endif
 
     // reload before next use that requires the original mask
     if (!reg_mask_is_not_empty(new_mask) && new_mask->may_spill) {

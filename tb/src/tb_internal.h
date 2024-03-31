@@ -65,7 +65,7 @@ for (uint64_t _bits_ = (bits), it = (start); _bits_; _bits_ >>= 1, ++it) if (_bi
 ////////////////////////////////
 #define TB_OPTDEBUG_STATS    0
 #define TB_OPTDEBUG_PASSES   0
-#define TB_OPTDEBUG_PEEP     1
+#define TB_OPTDEBUG_PEEP     0
 #define TB_OPTDEBUG_SCCP     0
 #define TB_OPTDEBUG_LOOP     0
 #define TB_OPTDEBUG_SROA     0
@@ -368,8 +368,12 @@ struct TB_Function {
     size_t param_count;
     TB_Node** params;
 
-    TB_Arena* arena; // stores nodes, uses & lattice elems.
-    TB_Arena* tmp_arena; // all the random allocs within passes
+    struct {
+        // stores nodes, user lists & lattice elems.
+        TB_Arena* arena;
+        // all the random allocs within passes
+        TB_Arena* tmp_arena;
+    };
 
     size_t node_count;
     TB_Node* root_node;

@@ -416,6 +416,11 @@ TB_Node* tb_inst_cstring(TB_Function* f, const char* str) {
 }
 
 TB_Node* tb_inst_array_access(TB_Function* f, TB_Node* base, TB_Node* index, int64_t stride) {
+    if (index->type == TB_INTEGER_CONST) {
+        uint64_t x = TB_NODE_GET_EXTRA_T(index, TB_NodeInt)->value;
+        return tb_inst_member_access(f, base, x * stride);
+    }
+
     TB_Node* n = tb_alloc_node(f, TB_ARRAY_ACCESS, TB_TYPE_PTR, 3, sizeof(TB_NodeArray));
     set_input(f, n, base, 1);
     set_input(f, n, index, 2);
@@ -910,7 +915,7 @@ void tb_inst_set_region_name(TB_Function* f, TB_Node* n, ptrdiff_t len, const ch
 void add_input_late(TB_Function* f, TB_Node* n, TB_Node* in) {
     // btw this is unnecessary, i'm just afraid of calling this function
     // on random nodes, technically it would work just fine.
-    assert(n->type == TB_REGION || n->type == TB_PHI || n->type == TB_ROOT || n->type == TB_CALLGRAPH || n->type == TB_MERGEMEM || n->type == TB_RETURN);
+    // assert(n->type == TB_REGION || n->type == TB_PHI || n->type == TB_ROOT || n->type == TB_CALLGRAPH || n->type == TB_MERGEMEM || n->type == TB_RETURN);
 
     if (n->input_count >= n->input_cap) {
         size_t new_cap = n->input_count * 2;

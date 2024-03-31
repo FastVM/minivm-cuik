@@ -6,7 +6,10 @@ struct TB_GraphCtrl {
 
     int pos; // where the stack head was before doing the code
     bool has_else;
-    bool is_loop;
+
+    enum {
+        B_NORMAL, B_LOOP, B_IF
+    } kind;
 
     // LOOP: [0] body, [1] break
     // IF:   [0] true, [1] false
@@ -251,14 +254,79 @@ void tb_builder_store(TB_GraphBuilder* g, int mem_var, int32_t offset, TB_CharUn
     }
 
     TB_Node* n = tb_alloc_node(f, TB_STORE, TB_TYPE_MEMORY, 4, sizeof(TB_NodeMemAccess));
-    set_input(f, n, f->trace.bot_ctrl, 0);
+    set_input(f, n, g->bot_ctrl, 0);
     set_input(f, n, g->vals[mem_var], 1);
     set_input(f, n, addr, 2);
     set_input(f, n, val, 3);
     TB_NODE_SET_EXTRA(n, TB_NodeMemAccess, .align = alignment);
 
-    // assign ROOT memory
     g->vals[mem_var] = n;
+}
+
+void tb_builder_atomic_load(TB_GraphBuilder* g, int mem_var, bool ctrl_dep, TB_DataType dt, int32_t offset, TB_MemoryOrder order) {
+    TB_Function* f = g->f;
+    TB_Node* addr = pop(g);
+    if (offset) {
+        TB_Node* n = tb_alloc_node(f, TB_MEMBER_ACCESS, TB_TYPE_PTR, 2, sizeof(TB_NodeMember));
+        set_input(f, n, addr, 1);
+        TB_NODE_SET_EXTRA(n, TB_NodeMember, .offset = offset);
+        addr = n;
+    }
+
+    TB_Node* n = tb_alloc_node(f, TB_ATOMIC_LOAD, TB_TYPE_TUPLE, 3, sizeof(TB_NodeAtomic));
+    if (ctrl_dep) {
+        set_input(f, n, g->bot_ctrl, 0);
+    }
+    set_input(f, n, g->vals[mem_var], 1);
+    set_input(f, n, addr, 2);
+    TB_NODE_SET_EXTRA(n, TB_NodeAtomic, .order = order, .order2 = TB_MEM_ORDER_SEQ_CST);
+
+    g->vals[mem_var] = tb__make_proj(f, TB_TYPE_MEMORY, n, 0);
+    push(g, tb__make_proj(f, dt, n, 1));
+}
+
+void tb_builder_atomic_store(TB_GraphBuilder* g, int mem_var, int32_t offset, TB_MemoryOrder order) {
+    TB_Function* f = g->f;
+    TB_Node* val  = pop(g);
+    TB_Node* addr = pop(g);
+    if (offset) {
+        TB_Node* n = tb_alloc_node(f, TB_MEMBER_ACCESS, TB_TYPE_PTR, 2, sizeof(TB_NodeMember));
+        set_input(f, n, addr, 1);
+        TB_NODE_SET_EXTRA(n, TB_NodeMember, .offset = offset);
+        addr = n;
+    }
+
+    TB_Node* n = tb_alloc_node(f, TB_ATOMIC_XCHG, TB_TYPE_TUPLE, 4, sizeof(TB_NodeAtomic));
+    set_input(f, n, g->bot_ctrl, 0);
+    set_input(f, n, g->vals[mem_var], 1);
+    set_input(f, n, addr, 2);
+    set_input(f, n, val, 3);
+    TB_NODE_SET_EXTRA(n, TB_NodeAtomic, .order = order, .order2 = TB_MEM_ORDER_SEQ_CST);
+
+    g->vals[mem_var] = tb__make_proj(f, TB_TYPE_MEMORY, n, 0);
+    tb__make_proj(f, val->dt, n, 1);
+}
+
+void tb_builder_atomic_rmw(TB_GraphBuilder* g, int mem_var, int32_t offset, int op, TB_MemoryOrder order) {
+    TB_Function* f = g->f;
+    TB_Node* val  = pop(g);
+    TB_Node* addr = pop(g);
+    if (offset) {
+        TB_Node* n = tb_alloc_node(f, TB_MEMBER_ACCESS, TB_TYPE_PTR, 2, sizeof(TB_NodeMember));
+        set_input(f, n, addr, 1);
+        TB_NODE_SET_EXTRA(n, TB_NodeMember, .offset = offset);
+        addr = n;
+    }
+
+    TB_Node* n = tb_alloc_node(f, op, TB_TYPE_TUPLE, 4, sizeof(TB_NodeAtomic));
+    set_input(f, n, g->bot_ctrl, 0);
+    set_input(f, n, g->vals[mem_var], 1);
+    set_input(f, n, addr, 2);
+    set_input(f, n, val,  3);
+    TB_NODE_SET_EXTRA(n, TB_NodeAtomic, .order = order, .order2 = TB_MEM_ORDER_SEQ_CST);
+
+    g->vals[mem_var] = tb__make_proj(f, TB_TYPE_MEMORY, n, 0);
+    push(g, tb__make_proj(f, val->dt, n, 1));
 }
 
 void tb_builder_debugbreak(TB_GraphBuilder* g) {
@@ -292,6 +360,7 @@ void tb_builder_if(TB_GraphBuilder* g, int total_hits, int taken) {
     // clone incoming state so we can diff & insert phis later
     ctrl->sp = sp;
     ctrl->val_cnt = g->val_cnt;
+    ctrl->kind = B_IF;
     FOR_N(i, 0, g->val_cnt) {
         ctrl->vals[i] = g->vals[i];
     }
@@ -338,62 +407,22 @@ void tb_builder_else(TB_GraphBuilder* g) {
     g->top_ctrl = g->bot_ctrl = ctrl->paths[1];
 }
 
-void tb_builder_endif(TB_GraphBuilder* g) {
-    assert(g->top_ctrl && "we're not inside of an if block");
-    TB_GraphCtrl* ctrl = g->top;
-    g->top = ctrl->prev;
-
-    if (!ctrl->has_else) {
-        // goto false => join
-        add_input_late(g->f, ctrl->join, ctrl->paths[1]);
-    }
-
-    if (g->bot_ctrl) {
-        // fallthru
-        add_input_late(g->f, ctrl->join, g->bot_ctrl);
-    }
-
-    // insert phis
-    TB_Node* join = ctrl->join;
-    assert(join->type == TB_REGION);
-    assert(g->val_cnt == ctrl->val_cnt && "paths on branch mismatch in outgoing variables?");
-
-    if (join->input_count > 0) {
-        FOR_N(i, 0, g->val_cnt) {
-            if (g->vals[i] != ctrl->vals[i]) {
-                TB_Node* n = tb_alloc_node_dyn(g->f, TB_PHI, g->vals[i]->dt, 3, 3, 0);
-                set_input(g->f, n, join, 0);
-                set_input(g->f, n, ctrl->vals[i], 1);
-                set_input(g->f, n, g->vals[i], 2);
-                g->vals[i] = n;
-            }
-        }
-
-        g->top_ctrl = g->bot_ctrl = join;
-    } else {
-        tb_kill_node(g->f, join);
-        g->top_ctrl = g->bot_ctrl = NULL;
-    }
-    tb_arena_restore(g->arena, ctrl->sp);
-}
-
 static void block_jmp(TB_GraphBuilder* g, TB_Node* bot, int depth) {
     TB_GraphCtrl* ctrl = g->top;
     while (depth--) { ctrl = ctrl->prev; }
 
     // add exit path
-    if (!ctrl->is_loop && ctrl->join == NULL) {
+    if (ctrl->kind != B_LOOP && ctrl->join == NULL) {
         ctrl->join = tb_alloc_node_dyn(g->f, TB_REGION, TB_TYPE_CONTROL, 0, 2, sizeof(TB_NodeRegion));
         TB_NODE_SET_EXTRA(ctrl->join, TB_NodeRegion);
     }
 
-    TB_Node* target = ctrl->is_loop ? ctrl->header : ctrl->join;
-
+    TB_Node* target = ctrl->kind == B_LOOP ? ctrl->header : ctrl->join;
     assert(ctrl->val_cnt == g->val_cnt);
     add_input_late(g->f, target, bot);
 
     // add edges to phis
-    if (ctrl->is_loop) {
+    if (ctrl->kind == B_LOOP) {
         FOR_N(i, 0, ctrl->val_cnt) {
             add_input_late(g->f, ctrl->vals[i], g->vals[i]);
         }
@@ -416,6 +445,68 @@ static void block_jmp(TB_GraphBuilder* g, TB_Node* bot, int depth) {
     }
 }
 
+void tb_builder_end(TB_GraphBuilder* g) {
+    TB_GraphCtrl* ctrl = g->top;
+    g->top = ctrl->prev;
+
+    switch (ctrl->kind) {
+        case B_NORMAL: {
+            if (g->bot_ctrl != NULL) {
+                block_jmp(g, g->bot_ctrl, 0);
+            }
+
+            FOR_N(i, 0, ctrl->val_cnt) { g->vals[i] = ctrl->vals[i]; }
+            g->top_ctrl = g->bot_ctrl = ctrl->join;
+            break;
+        }
+        case B_IF: {
+            assert(g->top_ctrl && "we're not inside of an if block");
+            if (!ctrl->has_else) {
+                // goto false => join
+                add_input_late(g->f, ctrl->join, ctrl->paths[1]);
+            }
+
+            if (g->bot_ctrl) {
+                // fallthru
+                add_input_late(g->f, ctrl->join, g->bot_ctrl);
+            }
+
+            // insert phis
+            TB_Node* join = ctrl->join;
+            assert(join->type == TB_REGION);
+            assert(g->val_cnt == ctrl->val_cnt && "paths on branch mismatch in outgoing variables?");
+
+            if (join->input_count > 0) {
+                FOR_N(i, 0, g->val_cnt) {
+                    if (g->vals[i] != ctrl->vals[i]) {
+                        TB_Node* n = tb_alloc_node_dyn(g->f, TB_PHI, g->vals[i]->dt, 3, 3, 0);
+                        set_input(g->f, n, join, 0);
+                        set_input(g->f, n, ctrl->vals[i], 1);
+                        set_input(g->f, n, g->vals[i], 2);
+                        g->vals[i] = n;
+                    }
+                }
+
+                g->top_ctrl = g->bot_ctrl = join;
+            } else {
+                tb_kill_node(g->f, join);
+                g->top_ctrl = g->bot_ctrl = NULL;
+            }
+            break;
+        }
+        case B_LOOP: {
+            TB_Node* header = ctrl->header;
+
+            // TODO(NeGate): phis are complete now, we can fold them out if unused
+            FOR_N(i, 0, ctrl->val_cnt) { g->vals[i] = ctrl->vals[i]; }
+            break;
+        }
+        default: tb_todo();
+    }
+
+    tb_arena_restore(g->arena, ctrl->sp);
+}
+
 void tb_builder_loop(TB_GraphBuilder* g) {
     TB_Function* f = g->f;
 
@@ -426,7 +517,7 @@ void tb_builder_loop(TB_GraphBuilder* g) {
     // add header region
     ctrl->header = tb_alloc_node_dyn(f, TB_NATURAL_LOOP, TB_TYPE_CONTROL, 0, 2, sizeof(TB_NodeRegion));
     ctrl->join = NULL;
-    ctrl->is_loop = true;
+    ctrl->kind = B_LOOP;
     TB_NODE_SET_EXTRA(ctrl->header, TB_NodeRegion);
 
     if (g->bot_ctrl) {
@@ -449,30 +540,6 @@ void tb_builder_loop(TB_GraphBuilder* g) {
 
     // goto the loop body
     g->top_ctrl = g->bot_ctrl = ctrl->header;
-}
-
-void tb_builder_endloop(TB_GraphBuilder* g) {
-    TB_GraphCtrl* ctrl = g->top;
-    g->top = ctrl->prev;
-
-    TB_Node* header = ctrl->header;
-    FOR_N(i, 0, ctrl->val_cnt) {
-        // phis are complete now, we can fold them out if unused
-        TB_Node* src = ctrl->vals[i];
-        /* if (src->type == TB_PHI && src->inputs[0] == header && src->input_count > 1) {
-            TB_Node* k = identity_phi(NULL, g->f, src);
-            if (k != src) {
-                // phi => same
-                subsume_node(g->f, src, k);
-                g->vals[i] = k;
-                continue;
-            }
-        } */
-
-        g->vals[i] = ctrl->vals[i];
-    }
-
-    tb_arena_restore(g->arena, ctrl->sp);
 }
 
 void tb_builder_br(TB_GraphBuilder* g, int depth) {
@@ -509,6 +576,7 @@ void tb_builder_block(TB_GraphBuilder* g) {
     TB_ArenaSavepoint sp = tb_arena_save(g->arena);
     TB_GraphCtrl* ctrl = tb_arena_alloc(g->arena, sizeof(TB_GraphCtrl) + sizeof(TB_Node*)*g->val_cnt);
     *ctrl = (TB_GraphCtrl){ 0 };
+    ctrl->kind = B_NORMAL;
     ctrl->sp = sp;
 
     ctrl->val_cnt = g->val_cnt;
@@ -516,22 +584,6 @@ void tb_builder_block(TB_GraphBuilder* g) {
 
     ctrl->prev = g->top;
     g->top = ctrl;
-}
-
-void tb_builder_endblock(TB_GraphBuilder* g) {
-    if (g->bot_ctrl != NULL) {
-        block_jmp(g, g->bot_ctrl, 0);
-    }
-
-    TB_GraphCtrl* ctrl = g->top;
-    g->top = ctrl->prev;
-
-    FOR_N(i, 0, ctrl->val_cnt) {
-        g->vals[i] = ctrl->vals[i];
-    }
-
-    g->top_ctrl = g->bot_ctrl = ctrl->join;
-    tb_arena_restore(g->arena, ctrl->sp);
 }
 
 void tb_builder_static_call(TB_GraphBuilder* g, TB_FunctionPrototype* proto, TB_Symbol* target, int mem_var, int nargs) {
