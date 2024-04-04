@@ -861,7 +861,7 @@ TB_Node* tb_inst_incomplete_phi(TB_Function* f, TB_DataType dt, TB_Node* region,
 }
 
 bool tb_inst_add_phi_operand(TB_Function* f, TB_Node* phi, TB_Node* region, TB_Node* val) {
-    assert(region->type != TB_REGION && "umm... im expecting a region not whatever that was");
+    assert(region->type == TB_REGION && "umm... im expecting a region not whatever that was");
     TB_Node* phi_region = phi->inputs[0];
 
     // the slot to fill is based on the predecessor list of the region

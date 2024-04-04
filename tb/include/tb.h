@@ -1505,6 +1505,15 @@ TB_API const char *tb_c_buf_to_data(TB_CBuffer *buf);
 /// Call to cleanup (free) the `const char *` from `tb_c_buf_to_data`
 TB_API void tb_c_data_free(const char *data);
 
+////////////////////////
+// TB to JSON objects //
+////////////////////////
+
+// Super special experimental stuff (no touchy yet)
+
+TB_API const char *tb_json_module(TB_CBuffer *buf, TB_Module* mod);
+TB_API const char *tb_json_function(TB_CBuffer *buf, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp);
+
 // codegen:
 //   output goes at the top of the code_arena, feel free to place multiple functions
 //   into the same code arena (although arenas aren't thread-safe you'll want one per thread

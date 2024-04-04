@@ -7,7 +7,7 @@
 typedef struct {
     size_t low;
     size_t high;
-} CFmtBlockRange;
+} JsonFmtBlockRange;
 
 typedef struct {
     const char *name;
@@ -24,18 +24,18 @@ typedef struct {
     nl_buffer_t *buf;
     ptrdiff_t loop_goes_to;
     int depth;
-} CFmtState;
+} JsonFmtState;
 
-static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n);
-static void c_fmt_typed_ref_to_node(CFmtState* ctx, TB_DataType dt, TB_Node* n);
+static void json_fmt_ref_to_node(JsonFmtState* ctx, TB_Node* n);
+static void json_fmt_typed_ref_to_node(JsonFmtState* ctx, TB_DataType dt, TB_Node* n);
 
-static void c_fmt_spaces(CFmtState *ctx) {
+static void json_fmt_spaces(JsonFmtState *ctx) {
     for (unsigned char i = 0; i < ctx->depth; i++) {
         nl_buffer_format(ctx->buf, "  ");
     }
 }
 
-static const char *c_fmt_type_name(TB_DataType dt) {
+static const char *json_fmt_type_name(TB_DataType dt) {
     switch (dt.type) {
         case TB_INT: {
             if (dt.data == 0) return  "void";
@@ -62,7 +62,7 @@ static const char *c_fmt_type_name(TB_DataType dt) {
     return NULL;
 }
 
-static const char *c_fmt_type_name_signed(TB_DataType dt) {
+static const char *json_fmt_type_name_signed(TB_DataType dt) {
     switch (dt.type) {
         case TB_INT: {
             if (dt.data == 0) return  "void";
@@ -89,17 +89,17 @@ static const char *c_fmt_type_name_signed(TB_DataType dt) {
     return NULL;
 }
 
-static void c_fmt_output(CFmtState* ctx, TB_Node* n) {
+static void json_fmt_output(JsonFmtState* ctx, TB_Node* n) {
     if (n->users != NULL) {
         if (!nl_hashset_put(&ctx->declared_vars, n)) {
-            nl_buffer_format(ctx->pre, "  %s v%u;\n", c_fmt_type_name(n->dt), n->gvn);
+            nl_buffer_format(ctx->pre, "  %s v%u;\n", json_fmt_type_name(n->dt), n->gvn);
         }
-        c_fmt_spaces(ctx);
+        json_fmt_spaces(ctx);
         nl_buffer_format(ctx->buf, "v%u = ", n->gvn);
     }
 }
 
-static bool c_fmt_will_inline(TB_Node *n) {
+static bool json_fmt_will_inline(TB_Node *n) {
     switch (n->type) {
         case TB_ROOT: case TB_INTEGER_CONST:
         case TB_REGION: case TB_NATURAL_LOOP: case TB_AFFINE_LOOP:
@@ -135,7 +135,7 @@ static bool c_fmt_will_inline(TB_Node *n) {
     return false;
 }
 
-static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
+static void json_fmt_inline_node(JsonFmtState* ctx, TB_Node *n) {
     const char* binop = NULL;
     bool is_signed = false;
     switch (n->type) {
@@ -159,14 +159,14 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
     if (binop) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
-        const char* tn = is_signed ? c_fmt_type_name_signed(n->dt) : c_fmt_type_name(n->dt);
+        const char* tn = is_signed ? json_fmt_type_name_signed(n->dt) : json_fmt_type_name(n->dt);
 
         nl_buffer_format(ctx->buf, "(");
         nl_buffer_format(ctx->buf, "(%s) ", tn);
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " %s ", binop);
         nl_buffer_format(ctx->buf, "(%s) ", tn);
-        c_fmt_ref_to_node(ctx, rhs);
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_SELECT) {
         TB_Node *cond = n->inputs[n->input_count-3];
@@ -174,85 +174,85 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
         TB_Node *els = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
         nl_buffer_format(ctx->buf, "(char) ");
-        c_fmt_ref_to_node(ctx, cond);
+        json_fmt_ref_to_node(ctx, cond);
         nl_buffer_format(ctx->buf, " ? ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-        c_fmt_ref_to_node(ctx, then);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+        json_fmt_ref_to_node(ctx, then);
         nl_buffer_format(ctx->buf, " : ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-        c_fmt_ref_to_node(ctx, els);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+        json_fmt_ref_to_node(ctx, els);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_EQ) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " == ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_NE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " != ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_SLT) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " < ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_SLE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " <= ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_ULT) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " < ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_ULE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " <= ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_FLT) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " < ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_CMP_FLE) {
         TB_Node *lhs = n->inputs[n->input_count-2];
         TB_Node *rhs = n->inputs[n->input_count-1];
         nl_buffer_format(ctx->buf, "(");
-        c_fmt_ref_to_node(ctx, lhs);
+        json_fmt_ref_to_node(ctx, lhs);
         nl_buffer_format(ctx->buf, " <= ");
-        nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
-        c_fmt_ref_to_node(ctx, rhs);
+        nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(lhs->dt));
+        json_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
     } else if (n->type == TB_FLOAT32_CONST) {
         TB_NodeFloat32* f = TB_NODE_GET_EXTRA(n);
@@ -320,13 +320,13 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
             }
         }
     } else if (n->type == TB_ZERO_EXT) {
-        c_fmt_ref_to_node(ctx, n->inputs[1]);
+        json_fmt_ref_to_node(ctx, n->inputs[1]);
     } else if (n->type == TB_SIGN_EXT) {
-        c_fmt_ref_to_node(ctx, n->inputs[1]);
+        json_fmt_ref_to_node(ctx, n->inputs[1]);
     } else if (n->type == TB_INTEGER_CONST) {
         TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
 
-        nl_buffer_format(ctx->buf, "(%s)", c_fmt_type_name(n->dt));
+        nl_buffer_format(ctx->buf, "(%s)", json_fmt_type_name(n->dt));
 
         if (num->value < 0xFFFF) {
             nl_buffer_format(ctx->buf, "%"PRIi64"llu", num->value);
@@ -338,21 +338,21 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
     }
 }
 
-static void c_fmt_ref_to_node(CFmtState* ctx, TB_Node* n) {
-    if (c_fmt_will_inline(n)) {
-        c_fmt_inline_node(ctx, n);
+static void json_fmt_ref_to_node(JsonFmtState* ctx, TB_Node* n) {
+    if (json_fmt_will_inline(n)) {
+        json_fmt_inline_node(ctx, n);
     } else {
         nl_buffer_format(ctx->buf, "v%u", n->gvn);
         return;
     }
 }
 
-static void c_fmt_typed_ref_to_node(CFmtState* ctx, TB_DataType dt, TB_Node *n) {
-    nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(dt));
-    c_fmt_ref_to_node(ctx, n);
+static void json_fmt_typed_ref_to_node(JsonFmtState* ctx, TB_DataType dt, TB_Node *n) {
+    nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(dt));
+    json_fmt_ref_to_node(ctx, n);
 }
 
-CFmtBlockRange *c_fmt_get_block_range(CFmtState* ctx, TB_Worklist* ws, TB_Node* n) {
+JsonFmtBlockRange *json_fmt_get_block_range(JsonFmtState* ctx, TB_Worklist* ws, TB_Node* n) {
     if (nl_table_get(&ctx->block_ranges, n) == NULL) {
         TB_BasicBlock* bb = ctx->f->scheduled[n->gvn];
 
@@ -360,7 +360,7 @@ CFmtBlockRange *c_fmt_get_block_range(CFmtState* ctx, TB_Worklist* ws, TB_Node* 
         tb_greedy_scheduler(ctx->f, &ctx->cfg, ws, NULL, bb);
         size_t foreach_end = dyn_array_length(ws->items);
 
-        CFmtBlockRange *range = tb_platform_heap_alloc(sizeof(CFmtBlockRange));
+        JsonFmtBlockRange *range = tb_platform_heap_alloc(sizeof(JsonFmtBlockRange));
 
         range->low = foreach_start;
         range->high = foreach_end;
@@ -371,7 +371,7 @@ CFmtBlockRange *c_fmt_get_block_range(CFmtState* ctx, TB_Worklist* ws, TB_Node* 
 }
 
 // deals with printing BB params
-static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
+static void json_fmt_branch_edge(JsonFmtState* ctx, TB_Node* n, bool fallthru) {
     TB_Node* target = fallthru ? cfg_next_control(n) : cfg_next_bb_after_cproj(n);
 
     if (cfg_is_region(target)) {
@@ -383,7 +383,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
             }
         }
 
-        c_fmt_spaces(ctx);
+        json_fmt_spaces(ctx);
         nl_buffer_format(ctx->buf, "{ // phi moves\n");
         ctx->depth += 1;
         size_t has_phi = 0;
@@ -404,9 +404,9 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                     if (USERN(u)->inputs[phi_i]->dt.type != TB_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_MEMORY) {
                         assert(phi_i >= 0);
                         if (pos != 0) {
-                            c_fmt_spaces(ctx);
-                            nl_buffer_format(ctx->buf, "%s a%zu = ", c_fmt_type_name(USERN(u)->dt), ctx->a + pos);
-                            c_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
+                            json_fmt_spaces(ctx);
+                            nl_buffer_format(ctx->buf, "%s a%zu = ", json_fmt_type_name(USERN(u)->dt), ctx->a + pos);
+                            json_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
                             nl_buffer_format(ctx->buf, ";\n");
                         }
                         pos += 1;
@@ -421,11 +421,11 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
                     if (USERN(u)->inputs[phi_i]->dt.type != TB_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_MEMORY) {
                         assert(phi_i >= 0);
                         if (pos == 0) {
-                            c_fmt_output(ctx, USERN(u));
-                            c_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
+                            json_fmt_output(ctx, USERN(u));
+                            json_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
                             nl_buffer_format(ctx->buf, ";\n");
                         } else {
-                            c_fmt_output(ctx, USERN(u));
+                            json_fmt_output(ctx, USERN(u));
                             nl_buffer_format(ctx->buf, "a%zu;\n", ctx->a + pos);
                         }
                         pos += 1;
@@ -434,27 +434,27 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
             }
         }
         ctx->depth -= 1;
-        c_fmt_spaces(ctx);
+        json_fmt_spaces(ctx);
         nl_buffer_format(ctx->buf, "}\n");
     }
 
-    c_fmt_spaces(ctx);
+    json_fmt_spaces(ctx);
     nl_buffer_format(ctx->buf, "goto bb%u;\n", target->gvn);
 }
 
-static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
+static void json_fmt_bb(JsonFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
     size_t declared_vars_length = dyn_array_length(&ctx->declared_vars);
     nl_buffer_format(ctx->buf, "bb%u:;\n", bb_start->gvn);
 
     TB_BasicBlock* bb = ctx->f->scheduled[bb_start->gvn];
-    CFmtBlockRange *range = c_fmt_get_block_range(ctx, ws, bb_start);
+    JsonFmtBlockRange *range = json_fmt_get_block_range(ctx, ws, bb_start);
 
     TB_Node* prev_effect = NULL;
     FOR_N(i, range->low, range->high) {
         TB_Node* n = ws->items[i];
 
         // skip these
-        if (c_fmt_will_inline(n) && n->type != TB_ROOT) {
+        if (json_fmt_will_inline(n) && n->type != TB_ROOT) {
             continue;
         }
 
@@ -464,18 +464,18 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
 
         switch (n->type) {
             case TB_DEAD: {
-                c_fmt_spaces(ctx);
+                json_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "// dead\n");
                 break;
             }
 
             case TB_DEBUGBREAK: {
-                c_fmt_spaces(ctx);
+                json_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "// debugbreak\n");
                 break;
             }
             case TB_UNREACHABLE: {
-                c_fmt_spaces(ctx);
+                json_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "// unreachable\n");
                 break;
             }
@@ -497,67 +497,67 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 }
 
                 if (succ_count == 1) {
-                    c_fmt_branch_edge(ctx, succ[0], false);
+                    json_fmt_branch_edge(ctx, succ[0], false);
                 } else if (succ_count == 2) {
                     if (br->keys[0].key == 0) {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "if (");
                         FOR_N(i, 1, n->input_count) {
                             if (i != 1) nl_buffer_format(ctx->buf, ", ");
-                            c_fmt_ref_to_node(ctx, n->inputs[i]);
+                            json_fmt_ref_to_node(ctx, n->inputs[i]);
                         }
                         nl_buffer_format(ctx->buf, ") {\n");
                         ctx->depth += 1;
-                        c_fmt_branch_edge(ctx, succ[0], false);
+                        json_fmt_branch_edge(ctx, succ[0], false);
                         ctx->depth -= 1;
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "} else {\n");
                         ctx->depth += 1;
-                        c_fmt_branch_edge(ctx, succ[1], false);
+                        json_fmt_branch_edge(ctx, succ[1], false);
                         ctx->depth -= 1;
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "}\n");
                     } else {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "if ((uint64_t) ");
                         FOR_N(i, 1, n->input_count) {
                             if (i != 1) nl_buffer_format(ctx->buf, ", ");
-                            c_fmt_ref_to_node(ctx, n->inputs[i]);
+                            json_fmt_ref_to_node(ctx, n->inputs[i]);
                         }
                         nl_buffer_format(ctx->buf, " == (uint64_t) %"PRIi64, br->keys[0].key);
                         nl_buffer_format(ctx->buf, ") {\n");
                         ctx->depth += 1;
-                        c_fmt_branch_edge(ctx, succ[1], false);
+                        json_fmt_branch_edge(ctx, succ[1], false);
                         ctx->depth -= 1;
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "} else {\n");
                         ctx->depth += 1;
-                        c_fmt_branch_edge(ctx, succ[0], false);
+                        json_fmt_branch_edge(ctx, succ[0], false);
                         ctx->depth -= 1;
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "}\n");
                     }
                 } else {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "switch ((uint64_t) ");
                     FOR_N(i, 1, n->input_count) {
                         if (i != 1) nl_buffer_format(ctx->buf, ", ");
-                        c_fmt_ref_to_node(ctx, n->inputs[i]);
+                        json_fmt_ref_to_node(ctx, n->inputs[i]);
                     }
                     nl_buffer_format(ctx->buf, ") {\n");
                     FOR_N(i, 1, succ_count) {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "case %"PRIi64"llu:;\n", br->keys[i-1].key);
                         ctx->depth += 1;
-                        c_fmt_branch_edge(ctx, succ[i], false);
+                        json_fmt_branch_edge(ctx, succ[i], false);
                         ctx->depth -= 1;
                     }
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "default:;\n");
                     ctx->depth += 1;
-                    c_fmt_branch_edge(ctx, succ[0], false);
+                    json_fmt_branch_edge(ctx, succ[0], false);
                     ctx->depth -= 1;
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "}\n");
                 }
                 tb_arena_restore(ctx->f->tmp_arena, sp);
@@ -565,7 +565,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             }
 
             case TB_TRAP: {
-                c_fmt_spaces(ctx);
+                json_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "throw new Error(\"trap\");\n");
                 break;
             }
@@ -581,12 +581,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     if (nrets == 0) {
                         nl_buffer_format(ctx->globals, "typedef void(*tb2c_%s_v%u_t)(", ctx->name, n->gvn);
                     } else if (nrets == 1) {
-                        nl_buffer_format(ctx->globals, "typedef %s(*tb2c_%s_v%u_t)(", c_fmt_type_name(rets[0].dt), ctx->name, n->gvn);
+                        nl_buffer_format(ctx->globals, "typedef %s(*tb2c_%s_v%u_t)(", json_fmt_type_name(rets[0].dt), ctx->name, n->gvn);
                     } else {
                         nl_buffer_format(ctx->globals, "typedef struct {\n");
                         size_t index = 0;
                         FOR_N(i, 0, nrets) {
-                            nl_buffer_format(ctx->globals, "  %s v%zu;\n", c_fmt_type_name(rets[i].dt), index);
+                            nl_buffer_format(ctx->globals, "  %s v%zu;\n", json_fmt_type_name(rets[i].dt), index);
                             index += 1;
                         }
                         nl_buffer_format(ctx->globals, "} tb2c_%s_v%u_ret_t;\n", ctx->name, n->gvn);
@@ -598,7 +598,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                             if (!first) {
                                 nl_buffer_format(ctx->globals, ", ");
                             }
-                            nl_buffer_format(ctx->globals, "%s", c_fmt_type_name(n->inputs[i]->dt));
+                            nl_buffer_format(ctx->globals, "%s", json_fmt_type_name(n->inputs[i]->dt));
                             first = false;
                         }
                     }
@@ -608,12 +608,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     nl_buffer_format(ctx->globals, ");\n");
                 }
                 if (nrets == 0 || nrets == 1) {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     if (nrets == 1) {
                         nl_buffer_format(ctx->buf, "return (tb2c_%s_ret_t) ", ctx->name);
                     }
                     nl_buffer_format(ctx->buf, "((tb2c_%s_v%u_t) ", ctx->name, n->gvn);
-                    c_fmt_ref_to_node(ctx, func);
+                    json_fmt_ref_to_node(ctx, func);
                     nl_buffer_format(ctx->buf, ")");
                     nl_buffer_format(ctx->buf, "(");
                     {
@@ -623,21 +623,21 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
-                                c_fmt_ref_to_node(ctx, n->inputs[i]);
+                                json_fmt_ref_to_node(ctx, n->inputs[i]);
                                 first = false;
                             }
                         }
                     }
                     nl_buffer_format(ctx->buf, ");\n");
                     if (nrets == 0) {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "return;\n");
                     }
                 } else {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tb2c_%s_v%u_ret_t v%u_ret = ", ctx->name, n->gvn, n->gvn);
                     nl_buffer_format(ctx->buf, "((tb2c_%s_v%u_t) ", ctx->name, n->gvn);
-                    c_fmt_ref_to_node(ctx, func);
+                    json_fmt_ref_to_node(ctx, func);
                     nl_buffer_format(ctx->buf, ")(");
                     {
                         bool first = true;
@@ -646,27 +646,27 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
-                                c_fmt_ref_to_node(ctx, n->inputs[i]);
+                                json_fmt_ref_to_node(ctx, n->inputs[i]);
                                 first = false;
                             }
                         }
                     }
                     nl_buffer_format(ctx->buf, ");\n");
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "{\n");
                     ctx->depth += 1;
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tb2c_%s_ret_t ret;\n", ctx->name);
                     size_t index = 0;
                     FOR_N(i, 0, nrets) {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "ret.v%zu = v%u_ret.v%zu;\n", index, n->gvn, index);
                         index += 1;
                     }
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "return (tb2c_%s_ret_t) ret;\n", ctx->name);
                     ctx->depth -= 1;
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "}\n");
                 }
                 break;
@@ -678,32 +678,32 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     count += 1;
                 }
                 if (count == 0) {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "return;\n");
                 } else if (count == 1) {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "return ");
                     FOR_N(i, 3, n->input_count) {
-                        c_fmt_ref_to_node(ctx, n->inputs[i]);
+                        json_fmt_ref_to_node(ctx, n->inputs[i]);
                     }
                     nl_buffer_format(ctx->buf, ";\n");
                 } else {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "{\n");
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "  tb2c_%s_ret_t ret;\n", ctx->name);
 
                     size_t index = 0;
                     FOR_N(i, 3, n->input_count) {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "  ret.v%zu = ", index);
-                        c_fmt_ref_to_node(ctx, n->inputs[i]);
+                        json_fmt_ref_to_node(ctx, n->inputs[i]);
                         nl_buffer_format(ctx->buf, ";\n");
                         index += 1;
                     }
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "  return ret;\n");
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "}\n");
                 }
                 break;
@@ -718,29 +718,29 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_STORE: {
                 TB_Node *dest = n->inputs[n->input_count-2];
                 TB_Node *src = n->inputs[n->input_count-1];
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "*(%s*) ", c_fmt_type_name(src->dt));
-                c_fmt_ref_to_node(ctx, dest);
+                json_fmt_spaces(ctx);
+                nl_buffer_format(ctx->buf, "*(%s*) ", json_fmt_type_name(src->dt));
+                json_fmt_ref_to_node(ctx, dest);
                 nl_buffer_format(ctx->buf, " = ");
-                c_fmt_ref_to_node(ctx, src);
+                json_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
 
             case TB_NEG: {
                 TB_Node *src = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
+                json_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "-");
-                c_fmt_ref_to_node(ctx, src);
+                json_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
 
             case TB_LOAD: {
                 TB_Node *src = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "*(%s*) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, src);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "*(%s*) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -756,24 +756,24 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_BITCAST: {
                 TB_Node *src = n->inputs[n->input_count-1];
                 if (src->dt.type == TB_FLOAT && n->dt.type == TB_FLOAT) {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "{\n");
                     ctx->depth += 1;
-                    c_fmt_spaces(ctx);
-                    nl_buffer_format(ctx->buf, "union {%s src; %s dest;} tmp;\n", c_fmt_type_name(src->dt), c_fmt_type_name(n->dt));
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
+                    nl_buffer_format(ctx->buf, "union {%s src; %s dest;} tmp;\n", json_fmt_type_name(src->dt), json_fmt_type_name(n->dt));
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tmp.src = ");
-                    c_fmt_ref_to_node(ctx, src);
+                    json_fmt_ref_to_node(ctx, src);
                     nl_buffer_format(ctx->buf, ";\n");
-                    c_fmt_output(ctx, n);
+                    json_fmt_output(ctx, n);
                     nl_buffer_format(ctx->buf, "tmp.dest;\n");
                     ctx->depth -= 1;
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "}\n");
                 } else {
-                    c_fmt_output(ctx, n);
-                    nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                    c_fmt_ref_to_node(ctx, src);
+                    json_fmt_output(ctx, n);
+                    nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                    json_fmt_ref_to_node(ctx, src);
                     nl_buffer_format(ctx->buf, ";\n");
                 }
                 break;
@@ -782,12 +782,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_OR: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " | ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -795,65 +795,65 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_XOR: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " ^ ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_ROL: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "((%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "((%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " << ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
-                nl_buffer_format(ctx->buf, ") | ((%s)", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, ") | ((%s)", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " >> (%d - ", n->dt.data);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, "));\n");
                 break;
             }
             case TB_SHR: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " >> ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_SAR: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " >> ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_SHL: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " << ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -861,12 +861,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_AND: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " & ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -875,10 +875,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_ADD: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " + ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -886,10 +886,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_SUB: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " - ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -897,64 +897,64 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_MUL: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " * ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_FDIV: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " / ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_SDIV: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(n->dt));
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " / ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(n->dt));
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_UDIV: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " / ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_SMOD: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(n->dt));
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " %% ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(n->dt));
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(n->dt));
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
             case TB_UMOD: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " %% ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -962,10 +962,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_EQ: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " == ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -973,10 +973,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_NE: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " != ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -988,10 +988,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_FLT: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " < ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -999,10 +999,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_FLE: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " <= ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1011,12 +1011,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_SLT: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " < ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1024,12 +1024,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_SLE: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " <= ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name_signed(lhs->dt));
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name_signed(lhs->dt));
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1038,10 +1038,10 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_ULT: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_typed_ref_to_node(ctx, lhs->dt, lhs);
                 nl_buffer_format(ctx->buf, " < ");
-                c_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
+                json_fmt_typed_ref_to_node(ctx, rhs->dt, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1049,20 +1049,20 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_CMP_ULE: {
                 TB_Node *lhs = n->inputs[n->input_count-2];
                 TB_Node *rhs = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, lhs);
+                json_fmt_output(ctx, n);
+                json_fmt_ref_to_node(ctx, lhs);
                 nl_buffer_format(ctx->buf, " <= ");
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
-                c_fmt_ref_to_node(ctx, rhs);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(lhs->dt));
+                json_fmt_ref_to_node(ctx, rhs);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
 
             case TB_MEMBER_ACCESS: {
                 TB_Node *ptr = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
+                json_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "(void*) ((char *) ");
-                c_fmt_ref_to_node(ctx, ptr);
+                json_fmt_ref_to_node(ctx, ptr);
                 nl_buffer_format(ctx->buf, " + %"PRIi64, TB_NODE_GET_EXTRA_T(n, TB_NodeMember)->offset);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
@@ -1073,12 +1073,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 TB_Node *cond = n->inputs[n->input_count-3];
                 TB_Node *then = n->inputs[n->input_count-2];
                 TB_Node *els = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                c_fmt_ref_to_node(ctx, cond);
+                json_fmt_output(ctx, n);
+                json_fmt_ref_to_node(ctx, cond);
                 nl_buffer_format(ctx->buf, " ? ");
-                c_fmt_ref_to_node(ctx, then);
+                json_fmt_ref_to_node(ctx, then);
                 nl_buffer_format(ctx->buf, " : ");
-                c_fmt_ref_to_node(ctx, els);
+                json_fmt_ref_to_node(ctx, els);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1089,9 +1089,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_INT2FLOAT:
             case TB_TRUNCATE: {
                 TB_Node *input = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
-                nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
-                c_fmt_ref_to_node(ctx, input);
+                json_fmt_output(ctx, n);
+                nl_buffer_format(ctx->buf, "(%s) ", json_fmt_type_name(n->dt));
+                json_fmt_ref_to_node(ctx, input);
                 nl_buffer_format(ctx->buf, ";\n");
                 break;
             }
@@ -1099,11 +1099,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_ARRAY_ACCESS: {
                 TB_Node *ptr = n->inputs[n->input_count-2];
                 TB_Node *index = n->inputs[n->input_count-1];
-                c_fmt_output(ctx, n);
+                json_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "(void*) ((char *) ");
-                c_fmt_ref_to_node(ctx, ptr);
+                json_fmt_ref_to_node(ctx, ptr);
                 nl_buffer_format(ctx->buf, " + ");
-                c_fmt_ref_to_node(ctx, index);
+                json_fmt_ref_to_node(ctx, index);
                 nl_buffer_format(ctx->buf, " * %"PRIi64, TB_NODE_GET_EXTRA_T(n, TB_NodeArray)->stride);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
@@ -1122,12 +1122,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 if (projs[2] == NULL) {
                     nl_buffer_format(ctx->globals, "typedef void(*tb2c_%s_v%u_t)(", ctx->name, n->gvn);
                 } else if (projs[3] == NULL) {
-                    nl_buffer_format(ctx->globals, "typedef %s(*tb2c_%s_v%u_t)(", c_fmt_type_name(projs[2]->dt), ctx->name, n->gvn);
+                    nl_buffer_format(ctx->globals, "typedef %s(*tb2c_%s_v%u_t)(", json_fmt_type_name(projs[2]->dt), ctx->name, n->gvn);
                 } else {
                     nl_buffer_format(ctx->globals, "typedef struct {\n");
                     FOR_N(i, 2, 4) {
                         if (projs[i] == NULL) break;
-                        nl_buffer_format(ctx->globals, "  %s v%u;\n", c_fmt_type_name(projs[i]->dt), projs[i]->gvn);
+                        nl_buffer_format(ctx->globals, "  %s v%u;\n", json_fmt_type_name(projs[i]->dt), projs[i]->gvn);
                     }
                     nl_buffer_format(ctx->globals, "} tb2c_%s_v%u_ret_t;\n", ctx->name, n->gvn);
                     nl_buffer_format(ctx->globals, "typedef tb2c_%s_v%u_ret_t(*tb2c_%s_v%u_t)(", ctx->name, n->gvn, ctx->name, n->gvn);
@@ -1139,7 +1139,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                             if (!first) {
                                 nl_buffer_format(ctx->globals, ", ");
                             }
-                            nl_buffer_format(ctx->globals, "%s", c_fmt_type_name(n->inputs[i]->dt));
+                            nl_buffer_format(ctx->globals, "%s", json_fmt_type_name(n->inputs[i]->dt));
                             first = false;
                         }
                     }
@@ -1150,12 +1150,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 nl_buffer_format(ctx->globals, ");\n");
                 if (projs[2] == NULL || projs[3] == NULL) {
                     if (projs[2] != NULL) {
-                        c_fmt_output(ctx, projs[2]);
+                        json_fmt_output(ctx, projs[2]);
                     } else {
-                        c_fmt_spaces(ctx);
+                        json_fmt_spaces(ctx);
                     }
                     nl_buffer_format(ctx->buf, "((tb2c_%s_v%u_t) ", ctx->name, n->gvn);
-                    c_fmt_ref_to_node(ctx, func);
+                    json_fmt_ref_to_node(ctx, func);
                     nl_buffer_format(ctx->buf, ")");
                     nl_buffer_format(ctx->buf, "(");
                     {
@@ -1165,20 +1165,20 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
-                                c_fmt_ref_to_node(ctx, n->inputs[i]);
+                                json_fmt_ref_to_node(ctx, n->inputs[i]);
                                 first = false;
                             }
                         }
                     }
                     nl_buffer_format(ctx->buf, ");\n");
                 } else {
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "{\n");
                     ctx->depth += 1;
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tb2c_%s_v%u_ret_t ret = ", ctx->name, n->gvn);
                     nl_buffer_format(ctx->buf, "((tb2c_%s_v%u_t) ", ctx->name, n->gvn);
-                    c_fmt_ref_to_node(ctx, func);
+                    json_fmt_ref_to_node(ctx, func);
                     nl_buffer_format(ctx->buf, ")(");
                     {
                         bool first = true;
@@ -1187,7 +1187,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
-                                c_fmt_ref_to_node(ctx, n->inputs[i]);
+                                json_fmt_ref_to_node(ctx, n->inputs[i]);
                                 first = false;
                             }
                         }
@@ -1196,12 +1196,12 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     if (projs[2] != NULL) {
                         FOR_N(i, 2, 4) {
                             if (projs[i] == NULL) break;
-                            c_fmt_output(ctx, projs[i]);
+                            json_fmt_output(ctx, projs[i]);
                             nl_buffer_format(ctx->buf, "ret.v%u;\n", projs[i]->gvn);
                         }
                     }
                     ctx->depth -= 1;
-                    c_fmt_spaces(ctx);
+                    json_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "}\n");
                 }
                 break;
@@ -1211,13 +1211,13 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 TB_Node *dest = n->inputs[n->input_count-3];
                 TB_Node *src = n->inputs[n->input_count-2];
                 TB_Node *len = n->inputs[n->input_count-1];
-                c_fmt_spaces(ctx);
+                json_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "memcpy(");
-                c_fmt_ref_to_node(ctx, dest);
+                json_fmt_ref_to_node(ctx, dest);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, src);
+                json_fmt_ref_to_node(ctx, src);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, len);
+                json_fmt_ref_to_node(ctx, len);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
             }
@@ -1226,13 +1226,13 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 TB_Node *a = n->inputs[n->input_count-3];
                 TB_Node *b = n->inputs[n->input_count-2];
                 TB_Node *c = n->inputs[n->input_count-1];
-                c_fmt_spaces(ctx);
+                json_fmt_spaces(ctx);
                 nl_buffer_format(ctx->buf, "memset(");
-                c_fmt_ref_to_node(ctx, a);
+                json_fmt_ref_to_node(ctx, a);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, b);
+                json_fmt_ref_to_node(ctx, b);
                 nl_buffer_format(ctx->buf, ", ");
-                c_fmt_ref_to_node(ctx, c);
+                json_fmt_ref_to_node(ctx, c);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
             }
@@ -1247,24 +1247,24 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
     }
 
     if (!cfg_is_terminator(bb->end)) {
-        c_fmt_branch_edge(ctx, bb->end, true);
+        json_fmt_branch_edge(ctx, bb->end, true);
     }
 }
 
-TB_API TB_CBuffer *tb_c_buf_new(void) {
+TB_API TB_CBuffer *tb_json_buf_new(void) {
     return (void *) nl_buffer_new();
 }
 
-TB_API const char *tb_c_buf_to_data(TB_CBuffer *buf) {
+TB_API const char *tb_json_buf_to_data(TB_CBuffer *buf) {
     return nl_buffer_get((void *) buf);
 }
 
-TB_API void tb_c_data_free(const char *data) {
+TB_API void tb_json_data_free(const char *data) {
     nl_buffer_get_free(data);
 }
 
-TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
-    nl_buffer_t *buf = (void *) c_buf;
+TB_API const char *tb_json_module(TB_CBuffer *c_buf, TB_Module *mod) {
+    nl_buffer_t *buf = nl_buffer_new();
     size_t n_private_syms = 0;
 
     void *arena = tb_arena_create(TB_ARENA_MEDIUM_CHUNK_SIZE);
@@ -1344,14 +1344,14 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
                         nl_buffer_format(buf, "#define tb2c_%s_ret_t int\n", sym->name);
                         nl_buffer_format(buf, "#define main(...) main(int v4, char **v5)\n");
                     } else {
-                        nl_buffer_format(buf, "typedef %s tb2c_%s_ret_t;\n", c_fmt_type_name(p->params[p->param_count].dt), sym->name);
+                        nl_buffer_format(buf, "typedef %s tb2c_%s_ret_t;\n", json_fmt_type_name(p->params[p->param_count].dt), sym->name);
                     }
                 } else {
                     nl_buffer_format(buf, "typedef struct {\n");
 
                     size_t index = 0;
                     FOR_N(i, 0, p->return_count) {
-                        nl_buffer_format(buf, "  %s v%zu;\n", c_fmt_type_name(p->params[p->param_count + i].dt), index);
+                        nl_buffer_format(buf, "  %s v%zu;\n", json_fmt_type_name(p->params[p->param_count + i].dt), index);
                         index += 1;
                     }
                     nl_buffer_format(buf, "} tb2c_%s_ret_t;\n", sym->name);
@@ -1367,7 +1367,7 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
                         if (count != 0) {
                             nl_buffer_format(buf, ", ");
                         }
-                        nl_buffer_format(buf, "%s v%u", c_fmt_type_name(params[i]->dt), params[i]->gvn);
+                        nl_buffer_format(buf, "%s v%u", json_fmt_type_name(params[i]->dt), params[i]->gvn);
                         count += 1;
                     }
                 }
@@ -1381,17 +1381,19 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
     }
 
     tb_arena_destroy(arena);
+
+    return nl_buffer_get(buf);
 }
 
-TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp) {
-    nl_buffer_t *buf = (void *) c_buf;
-    cuikperf_region_start("print_c", NULL);
+TB_API const char *tb_json_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp) {
+    nl_buffer_t *buf = nl_buffer_new();
+    cuikperf_region_start("print_json", NULL);
     const char *name = f->super.name;
 
     f->tmp_arena = tmp;
     f->worklist  = ws;
 
-    CFmtState ctx = { name, f, f->super.module };
+    JsonFmtState ctx = { name, f, f->super.module };
     ctx.globals = nl_buffer_new();
     ctx.buf = nl_buffer_new();
     ctx.pre = nl_buffer_new();
@@ -1409,7 +1411,7 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     // TB_Node* end_bb = NULL;
     FOR_N(i, 0, ctx.cfg.block_count) {
         ctx.depth += 1;
-        c_fmt_bb(&ctx, ws, ws->items[i]);
+        json_fmt_bb(&ctx, ws, ws->items[i]);
         ctx.depth -= 1;
     }
     tb_free_cfg(&ctx.cfg);
@@ -1428,7 +1430,7 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
             if (count != 0) {
                 nl_buffer_format(buf, ", ");
             }
-            nl_buffer_format(buf, "%s v%u", c_fmt_type_name(params[i]->dt), params[i]->gvn);
+            nl_buffer_format(buf, "%s v%u", json_fmt_type_name(params[i]->dt), params[i]->gvn);
             count += 1;
         }
     }
@@ -1445,4 +1447,6 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     nl_buffer_format(buf, "}\n");
 
     cuikperf_region_end();
+
+    return nl_buffer_get(buf);
 }
