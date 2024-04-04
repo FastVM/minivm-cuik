@@ -65,11 +65,8 @@ static const char *c_fmt_type_name(TB_DataType dt) {
             else tb_todo();
             break;
         }
-        case TB_FLOAT: {
-            if (dt.data == TB_FLT_32) return  "float";
-            if (dt.data == TB_FLT_64) return  "double";
-            break;
-        }
+        case TB_FLOAT32: return "float";
+        case TB_FLOAT64: return "double";
         default: tb_todo();
     }
     return NULL;
@@ -92,11 +89,8 @@ static const char *c_fmt_type_name_signed(TB_DataType dt) {
             else tb_todo();
             break;
         }
-        case TB_FLOAT: {
-            if (dt.data == TB_FLT_32) return  "float";
-            if (dt.data == TB_FLT_64) return  "double";
-            break;
-        }
+        case TB_FLOAT32: return "float";
+        case TB_FLOAT64: return "double";
         default: tb_todo();
     }
     return NULL;
@@ -124,10 +118,8 @@ static bool c_fmt_will_inline(TB_Node *n) {
         break;
     }
 
-    size_t len = 0;
-    for (User *head = n->users; head != NULL; head = head->next) {
-        len += 1;
-
+    size_t len = n->user_count;
+    FOR_USERS(head, n) {
         // counts as two uses in the C code
         if (USERN(head)->type == TB_ROL) len += 1;
     }
@@ -509,10 +501,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     }
                 }
 
-                if (succ_count == 1) {
-                    c_fmt_branch_edge(ctx, succ[0], false);
-                } else if (succ_count == 2) {
-                    if (br->keys[0].key == 0) {
+                TB_NodeBranchProj* if_br = cfg_if_branch(n);
+                if (if_br) {
+                    if (if_br->key == 0) {
                         c_fmt_spaces(ctx);
                         nl_buffer_format(ctx->buf, "if (");
                         FOR_N(i, 1, n->input_count) {
@@ -537,7 +528,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                             if (i != 1) nl_buffer_format(ctx->buf, ", ");
                             c_fmt_ref_to_node(ctx, n->inputs[i]);
                         }
-                        nl_buffer_format(ctx->buf, " == (uint64_t) %"PRIi64, br->keys[0].key);
+                        nl_buffer_format(ctx->buf, " == (uint64_t) %"PRIi64, if_br->key);
                         nl_buffer_format(ctx->buf, ") {\n");
                         ctx->depth += 1;
                         c_fmt_branch_edge(ctx, succ[1], false);
@@ -559,8 +550,11 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     }
                     nl_buffer_format(ctx->buf, ") {\n");
                     FOR_N(i, 1, succ_count) {
+                        TB_Node* proj = USERN(proj_with_index(n, i));
+                        TB_NodeBranchProj* p = TB_NODE_GET_EXTRA(proj);
+
                         c_fmt_spaces(ctx);
-                        nl_buffer_format(ctx->buf, "case %"PRIi64"llu:;\n", br->keys[i-1].key);
+                        nl_buffer_format(ctx->buf, "case %"PRIi64"llu:\n", p->key);
                         ctx->depth += 1;
                         c_fmt_branch_edge(ctx, succ[i], false);
                         ctx->depth -= 1;
@@ -768,7 +762,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
 
             case TB_BITCAST: {
                 TB_Node *src = n->inputs[n->input_count-1];
-                if (src->dt.type == TB_FLOAT && n->dt.type == TB_FLOAT) {
+                if (TB_IS_FLOAT_TYPE(src->dt) && TB_IS_FLOAT_TYPE(n->dt)) {
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "{\n");
                     ctx->depth += 1;

@@ -11,7 +11,7 @@ enum {
 #define USERN(u) ((u)->_n)    // node
 #define USERI(u) ((u)->_slot) // index
 
-#define FOR_USERS(u, n) for (TB_User u = n->users; u; u = u->next)
+#define FOR_USERS(u, n) for (TB_User *u = (n)->users, *_end_ = &u[(n)->user_count]; u != _end_; u++)
 
 ////////////////////////////////
 // Constant prop
@@ -70,7 +70,8 @@ struct Lattice {
         //   \    ~null
         //    \   /
         //     ptr
-        LATTICE_PTR,
+        LATTICE_ALLPTR,
+        LATTICE_ANYPTR,
         LATTICE_NULL,
         LATTICE_XNULL,
         LATTICE_PTRCON,
@@ -122,12 +123,20 @@ typedef struct {
     TB_Function** ws;
 } IPOSolver;
 
+static bool is_proj(TB_Node* n) {
+    return n->type == TB_PROJ || n->type == TB_MACH_PROJ || n->type == TB_BRANCH_PROJ;
+}
+
 static uint64_t tb__mask(uint64_t bits) {
     return ~UINT64_C(0) >> (64 - bits);
 }
 
-static bool ctrl_out_as_cproj_but_not_branch(TB_Node* n) {
-    return n->type == TB_CALL || n->type == TB_TAILCALL || n->type == TB_SYSCALL || n->type == TB_READ || n->type == TB_WRITE;
+static bool cfg_is_fork(TB_Node* n) {
+    return n->type == TB_BRANCH;
+}
+
+static bool cfg_is_cproj(TB_Node* n) {
+    return is_proj(n) && n->dt.type == TB_CONTROL;
 }
 
 static bool cfg_is_mproj(TB_Node* n) {
@@ -136,22 +145,19 @@ static bool cfg_is_mproj(TB_Node* n) {
 
 // includes tuples which have control flow
 static bool cfg_is_control(TB_Node* n) {
-    // easy case
-    if (n->dt.type == TB_CONTROL) return true;
-
+    if (n->dt.type == TB_CONTROL) { return true; }
     if (n->dt.type == TB_TUPLE) {
         FOR_USERS(u, n) {
-            if (USERN(u)->type == TB_PROJ && USERN(u)->dt.type == TB_CONTROL) { return true; }
+            if (cfg_is_cproj(USERN(u))) { return true; }
         }
     }
-
     return false;
 }
 
 static bool cfg_is_bb_entry(TB_Node* n) {
     if (n->type == TB_REGION) {
         return true;
-    } else if (n->type == TB_PROJ && (n->inputs[0]->type == TB_ROOT || n->inputs[0]->type == TB_BRANCH)) {
+    } else if (cfg_is_cproj(n) && (n->inputs[0]->type == TB_ROOT || n->inputs[0]->type == TB_BRANCH)) {
         // Start's control proj or a branch target
         return true;
     } else {
@@ -159,16 +165,21 @@ static bool cfg_is_bb_entry(TB_Node* n) {
     }
 }
 
-static bool cfg_underneath(TB_CFG* cfg, TB_Node* a, TB_BasicBlock* bb) {
-    // follow until we hit a terminator
-    for (;;) {
-        a = a->inputs[0];
+// returns a BranchProj's falsey proj, if it's an if-like TB_BRANCH
+static TB_NodeBranchProj* cfg_if_branch(TB_Node* n) {
+    assert(n->type == TB_BRANCH);
+    TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
+    if (br->succ_count != 2) { return NULL; }
 
-        ptrdiff_t search = nl_map_get(cfg->node_to_block, a);
-        if (search >= 0) {
-            return &cfg->node_to_block[search].v == bb;
+    FOR_USERS(u, n) {
+        if (USERN(u)->type == TB_BRANCH_PROJ) {
+            TB_NodeBranchProj* proj = TB_NODE_GET_EXTRA(USERN(u));
+            if (proj->index == 1) { return proj; }
         }
     }
+
+    // shouldn't be reached wtf?
+    return NULL;
 }
 
 static bool is_mem_out_op(TB_Node* n) {
@@ -176,7 +187,7 @@ static bool is_mem_out_op(TB_Node* n) {
 }
 
 static bool is_pinned(TB_Node* n) {
-    return (n->type >= TB_ROOT && n->type <= TB_SAFEPOINT_POLL) || n->type == TB_PROJ || n->type == TB_MACH_PROJ;
+    return (n->type >= TB_ROOT && n->type <= TB_SAFEPOINT_POLL) || is_proj(n);
 }
 
 static bool is_mem_end_op(TB_Node* n) {
@@ -191,18 +202,22 @@ static bool is_mem_only_in_op(TB_Node* n) {
     return n->type == TB_SAFEPOINT_POLL || n->type == TB_LOAD;
 }
 
+static bool single_use(TB_Node* n) {
+    return n->user_count == 1;
+}
+
 ////////////////////////////////
 // CFG analysis
 ////////////////////////////////
 // if we see a branch projection, it may either be a BB itself
 // or if it enters a REGION directly, then that region is the BB.
 static TB_Node* cfg_next_bb_after_cproj(TB_Node* proj) {
-    assert(proj->type == TB_PROJ && proj->inputs[0]->type == TB_BRANCH);
+    assert(proj->type == TB_BRANCH_PROJ && proj->inputs[0]->type == TB_BRANCH);
     TB_Node* n = proj->inputs[0];
 
     assert(proj->users && "missing successor after cproj");
     TB_Node* r = USERN(proj->users);
-    if (proj->users->next != NULL || r->type != TB_REGION) {
+    if (!single_use(proj) || r->type != TB_REGION) {
         // multi-user proj, this means it's basically a BB
         return proj;
     }
@@ -219,7 +234,7 @@ static TB_Node* cfg_next_bb_after_cproj(TB_Node* proj) {
     return r;
 }
 
-static TB_User proj_with_index(TB_Node* n, int i) {
+static TB_User* proj_with_index(TB_Node* n, int i) {
     FOR_USERS(u, n) {
         TB_NodeProj* p = TB_NODE_GET_EXTRA(USERN(u));
         if (p->index == i) { return u; }
@@ -228,7 +243,7 @@ static TB_User proj_with_index(TB_Node* n, int i) {
     return NULL;
 }
 
-static TB_User cfg_next_user(TB_Node* n) {
+static TB_User* cfg_next_user(TB_Node* n) {
     FOR_USERS(u, n) {
         if (cfg_is_control(USERN(u))) { return u; }
     }
@@ -258,27 +273,6 @@ static TB_Node* cfg_next_control(TB_Node* n) {
     }
 
     return NULL;
-}
-
-static TB_Node* get_pred(TB_Node* n, int i) {
-    TB_Node* base = n;
-    n = n->inputs[i];
-
-    if (base->type == TB_REGION && n->type == TB_PROJ) {
-        TB_Node* parent = n->inputs[0];
-
-        // start or cprojs with multiple users (it's a BB) will just exit
-        if (parent->type == TB_ROOT || (!ctrl_out_as_cproj_but_not_branch(parent) && n->users->next != NULL)) {
-            return n;
-        }
-        n = parent;
-    }
-
-    while (!cfg_is_bb_entry(n)) {
-        n = n->inputs[0];
-    }
-
-    return n;
 }
 
 static TB_Node* cfg_get_pred(TB_CFG* cfg, TB_Node* n, int i) {

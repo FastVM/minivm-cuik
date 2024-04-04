@@ -36,7 +36,6 @@ static bool is_node_ready(TB_Function* f, TB_Worklist* ws, TB_BasicBlock* bb, TB
 }
 
 // should probably move this out, it's useful elsewhere
-static bool is_proj(TB_Node* n) { return n->type == TB_PROJ || n->type == TB_MACH_PROJ; }
 static ArenaArray(ReadyNode) ready_up(ArenaArray(ReadyNode) ready, Set* ready_set, TB_Node* n, int prio) {
     TB_OPTDEBUG(SCHEDULE)(printf("        READY    "), tb_print_dumb_node(NULL, n), printf("\n"));
     set_put(ready_set, n->gvn);
@@ -107,7 +106,7 @@ void tb_list_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(Ph
     TB_Node* cmp = NULL;
 
     // TODO(NeGate): we shouldn't do this on VLIWs, ideally we schedule predication earlier there
-    if (end->type == TB_BRANCH && f->scheduled[end->inputs[1]->gvn] == bb && end->inputs[1]->users->next == NULL &&
+    if (end->type == TB_BRANCH && f->scheduled[end->inputs[1]->gvn] == bb && end->inputs[1]->user_count == 1 &&
         end->inputs[1]->type != TB_PROJ && end->inputs[1]->type != TB_MACH_PROJ) {
         cmp = end->inputs[1];
     }

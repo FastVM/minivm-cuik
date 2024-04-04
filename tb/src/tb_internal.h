@@ -153,7 +153,8 @@ struct TB_DebugType {
 
         TB_DEBUG_TYPE_UINT,
         TB_DEBUG_TYPE_INT,
-        TB_DEBUG_TYPE_FLOAT,
+        TB_DEBUG_TYPE_FLOAT32,
+        TB_DEBUG_TYPE_FLOAT64,
 
         TB_DEBUG_TYPE_ARRAY,
         TB_DEBUG_TYPE_POINTER,
@@ -397,10 +398,6 @@ struct TB_Function {
         // it's what the peepholes are iterating on
         TB_Worklist* worklist;
 
-        // tracks the fancier type system:
-        //   hash-consing because there's a lot of
-        //   redundant types we might construct.
-        NL_HashSet type_interner;
         // track a lattice per node (basically all get one so a compact array works)
         size_t type_cap;
         Lattice** types;
@@ -499,6 +496,20 @@ typedef struct {
     TB_External** data;
 } ExportList;
 
+// lock-free hashset
+typedef struct LatticeTable {
+    _Atomic(struct LatticeTable*) prev;
+
+    uint32_t exp;
+
+    // tracks how many entries have
+    // been moved once we're resizing
+    _Atomic uint32_t moved;
+    _Atomic uint32_t move_done;
+    _Atomic uint32_t count;
+    _Atomic(uintptr_t) data[];
+} LatticeTable;
+
 struct TB_Module {
     bool is_jit;
     bool visited; // used by the linker
@@ -527,6 +538,10 @@ struct TB_Module {
     // of a _tls_index
     TB_Symbol* tls_index_extern;
     TB_Symbol* chkstk_extern;
+
+    struct {
+        _Atomic(LatticeTable*) table;
+    } lattice;
 
     _Atomic uint32_t uses_chkstk;
     _Atomic uint32_t compiled_function_count;
@@ -708,7 +723,7 @@ void tb_export_append_chunk(TB_ExportBuffer* buffer, TB_ExportChunk* c);
 ////////////////////////////////
 void set_input(TB_Function* f, TB_Node* n, TB_Node* in, int slot);
 void add_input_late(TB_Function* f, TB_Node* n, TB_Node* in);
-void add_user(TB_Function* f, TB_Node* n, TB_Node* in, int slot, User* recycled);
+void add_user(TB_Function* f, TB_Node* n, TB_Node* in, int slot);
 void print_node_sexpr(TB_Node* n, int depth);
 
 TB_Symbol* tb_symbol_alloc(TB_Module* m, TB_SymbolTag tag, ptrdiff_t len, const char* name, size_t size);
@@ -716,6 +731,7 @@ void tb_symbol_append(TB_Module* m, TB_Symbol* s);
 
 void tb_emit_symbol_patch(TB_FunctionOutput* func_out, TB_Symbol* target, size_t pos);
 TB_Global* tb__small_data_intern(TB_Module* m, size_t len, const void* data);
+void tb__lattice_init(TB_Module* m);
 
 // out_bytes needs at least 16 bytes
 void tb__md5sum(uint8_t* out_bytes, uint8_t* initial_msg, size_t initial_len);

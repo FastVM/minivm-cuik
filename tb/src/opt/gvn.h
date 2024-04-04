@@ -13,10 +13,8 @@ static size_t extra_bytes(TB_Node* n) {
             return sizeof(TB_NodeLookup) + (l->entry_count * sizeof(TB_LookupEntry));
         }
 
-        case TB_BRANCH: {
-            TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
-            return sizeof(TB_NodeBranch) + ((br->succ_count - 1) * sizeof(int64_t));
-        }
+        case TB_BRANCH:
+        return sizeof(TB_NodeBranch);
 
         case TB_SAFEPOINT_POLL:
         return sizeof(TB_NodeSafepoint);
@@ -130,6 +128,9 @@ static size_t extra_bytes(TB_Node* n) {
         case TB_PROJ:
         return sizeof(TB_NodeProj);
 
+        case TB_BRANCH_PROJ:
+        return sizeof(TB_NodeBranchProj);
+
         case TB_MACH_COPY:
         return sizeof(TB_NodeMachCopy);
 
@@ -145,34 +146,29 @@ static size_t extra_bytes(TB_Node* n) {
 }
 
 uint32_t gvn_hash(void* a) {
-    uint32_t h;
-    CUIK_TIMED_BLOCK("hash") {
-        TB_Node* n = a;
-        size_t extra = extra_bytes(n);
-        h = n->type + n->dt.raw + n->input_count + extra;
+    TB_Node* n = a;
+    size_t extra = extra_bytes(n);
+    uint32_t h = n->type + n->dt.raw + n->input_count + extra;
 
-        // locals can't be put into the GVN table
-        assert(n->type != TB_LOCAL);
+    // locals can't be put into the GVN table
+    assert(n->type != TB_LOCAL);
 
-        FOR_N(i, 0, n->input_count) {
-            h += n->inputs[i] ? n->inputs[i]->gvn : 0;
-        }
-
-        // fnv1a the extra space
-        uint32_t* extra_arr = (uint32_t*) n->extra;
-        FOR_N(i, 0, extra / 4) {
-            h += extra_arr[i];
-        }
-
-        FOR_N(i, extra & ~0x7, extra) {
-            h += n->extra[i];
-        }
-
-        // fib hashing amirite
-        h = ((uint64_t) h * 11400714819323198485llu) >> 32llu;
+    FOR_N(i, 0, n->input_count) {
+        h += n->inputs[i] ? n->inputs[i]->gvn : 0;
     }
 
-    return h;
+    // fnv1a the extra space
+    uint32_t* extra_arr = (uint32_t*) n->extra;
+    FOR_N(i, 0, extra / 4) {
+        h += extra_arr[i];
+    }
+
+    FOR_N(i, extra & ~0x7, extra) {
+        h += n->extra[i];
+    }
+
+    // fib hashing amirite
+    return ((uint64_t) h * 11400714819323198485llu) >> 32llu;
 }
 
 bool gvn_compare(void* a, void* b) {

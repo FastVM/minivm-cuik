@@ -16,9 +16,12 @@ static void print_type(TB_DataType dt) {
             else printf("ptr%d", dt.data);
             break;
         }
-        case TB_FLOAT: {
-            if (dt.data == TB_FLT_32) printf("f32");
-            if (dt.data == TB_FLT_64) printf("f64");
+        case TB_FLOAT32: {
+            printf("f32");
+            break;
+        }
+        case TB_FLOAT64: {
+            printf("f64");
             break;
         }
         case TB_TUPLE: {
@@ -118,7 +121,7 @@ static void print_ref_to_node(PrinterCtx* ctx, TB_Node* n, bool def) {
         } else {
             printf("sym%p", sym);
         }
-    } else if (n->type == TB_PROJ && n->dt.type == TB_CONTROL) {
+    } else if (cfg_is_cproj(n)) {
         if (n->inputs[0]->type == TB_ROOT) {
             print_ref_to_node(ctx, n->inputs[0], def);
         } else {
@@ -200,8 +203,8 @@ static void print_bb(PrinterCtx* ctx, TB_Worklist* ws, TB_Node* bb_start) {
         // skip these
         if (n->type == TB_INTEGER_CONST || n->type == TB_FLOAT32_CONST ||
             n->type == TB_FLOAT64_CONST || n->type == TB_SYMBOL ||
-            n->type == TB_PROJ || n->type == TB_MACH_PROJ || n->type == TB_REGION ||
-            n->type == TB_NATURAL_LOOP || n->type == TB_AFFINE_LOOP ||
+            n->type == TB_PROJ || n->type == TB_BRANCH_PROJ || n->type == TB_MACH_PROJ ||
+            n->type == TB_REGION || n->type == TB_NATURAL_LOOP || n->type == TB_AFFINE_LOOP ||
             n->type == TB_NULL || n->type == TB_PHI) {
             continue;
         }
@@ -222,41 +225,36 @@ static void print_bb(PrinterCtx* ctx, TB_Worklist* ws, TB_Node* bb_start) {
 
                 // fill successors
                 FOR_USERS(u, n) {
-                    if (USERN(u)->type == TB_PROJ) {
+                    if (USERN(u)->type == TB_BRANCH_PROJ) {
                         int index = TB_NODE_GET_EXTRA_T(USERN(u), TB_NodeProj)->index;
                         succ[index] = USERN(u);
                     }
                 }
 
-                if (br->succ_count == 1) {
-                    printf("  goto ");
-                    print_branch_edge(ctx, succ[0], false);
-                } else if (br->succ_count == 2) {
+                assert(br->succ_count >= 2);
+                if (br->succ_count == 2) {
                     int bits = n->inputs[1]->dt.type == TB_PTR ? 64 : n->inputs[1]->dt.data;
 
                     printf("  if ");
-                    FOR_N(i, 1, n->input_count) {
-                        if (i != 1) printf(", ");
-                        print_ref_to_node(ctx, n->inputs[i], false);
-                    }
-                    if (br->keys[0].key == 0) {
+                    print_ref_to_node(ctx, n->inputs[1], false);
+                    int64_t key = TB_NODE_GET_EXTRA_T(succ[1], TB_NodeBranchProj)->key;
+                    if (key == 0) {
                         printf(" then ");
                     } else {
-                        printf(" != %"PRId64" then ", tb__sxt(br->keys[0].key, bits, 64));
+                        printf(" != %"PRId64" then ", key);
                     }
                     print_branch_edge(ctx, succ[0], false);
                     printf(" else ");
                     print_branch_edge(ctx, succ[1], false);
                 } else {
                     printf("  br ");
-                    FOR_N(i, 1, n->input_count) {
-                        if (i != 1) printf(", ");
-                        print_ref_to_node(ctx, n->inputs[i], false);
-                    }
+                    print_ref_to_node(ctx, n->inputs[1], false);
                     printf("%s=> {\n", n->input_count > 1 ? " " : "");
 
                     FOR_N(i, 0, br->succ_count) {
-                        if (i != 0) printf("    %"PRId64": ", br->keys[i - 1].key);
+                        int64_t key = TB_NODE_GET_EXTRA_T(succ[i], TB_NodeBranchProj)->key;
+
+                        if (i != 0) printf("    %"PRId64": ", key);
                         else printf("    default: ");
 
                         print_branch_edge(ctx, succ[i], false);

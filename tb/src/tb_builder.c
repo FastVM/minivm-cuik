@@ -17,6 +17,7 @@ static TB_Node* transfer_ctrl(TB_Function* f, TB_Node* n) {
     if (f->line_loc) {
         nl_table_put(&f->locations, n, f->line_loc);
     }
+    assert(prev);
     return prev;
 }
 
@@ -108,8 +109,8 @@ static void* alloc_from_node_arena(TB_Function* f, size_t necessary_size) {
 
 TB_Node* tb_alloc_node_dyn(TB_Function* f, int type, TB_DataType dt, int input_count, int input_cap, size_t extra) {
     assert(input_count < UINT16_MAX && "too many inputs!");
-
     TB_Node* n = alloc_from_node_arena(f, sizeof(TB_Node) + extra);
+
     n->type = type;
     n->input_cap = input_cap;
     n->input_count = input_count;
@@ -124,10 +125,15 @@ TB_Node* tb_alloc_node_dyn(TB_Function* f, int type, TB_DataType dt, int input_c
         n->inputs = NULL;
     }
 
+    // most nodes don't have many users, although the ones which do will have a shit load (root node)
+    n->user_count = 0;
+    n->user_cap   = 4;
+    n->users = alloc_from_node_arena(f, 4 * sizeof(TB_User));
+    memset(n->users, 0xF0, 4 * sizeof(TB_User));
+
     if (extra > 0) {
         memset(n->extra, 0, extra);
     }
-
     return n;
 }
 
@@ -173,7 +179,7 @@ TB_Node* tb_inst_ptr2int(TB_Function* f, TB_Node* src, TB_DataType dt) {
 }
 
 TB_Node* tb_inst_int2float(TB_Function* f, TB_Node* src, TB_DataType dt, bool is_signed) {
-    assert(dt.type == TB_FLOAT);
+    assert(TB_IS_FLOAT_TYPE(dt));
     assert(src->dt.type == TB_INT);
 
     if (src->type == TB_INTEGER_CONST) {
@@ -469,16 +475,13 @@ TB_Node* tb_inst_syscall(TB_Function* f, TB_DataType dt, TB_Node* syscall_num, s
     TB_NodeCall* c = TB_NODE_GET_EXTRA(n);
     c->proj_count = 3;
     c->proto = NULL;
-    c->projs[0] = cproj;
-    c->projs[1] = mproj;
-    c->projs[2] = dproj;
     return dproj;
 }
 
 TB_MultiOutput tb_inst_call(TB_Function* f, TB_FunctionPrototype* proto, TB_Node* target, size_t param_count, TB_Node** params) {
     size_t proj_count = 2 + (proto->return_count > 1 ? proto->return_count : 1);
 
-    TB_Node* n = tb_alloc_node(f, TB_CALL, TB_TYPE_TUPLE, 3 + param_count, sizeof(TB_NodeCall) + (sizeof(TB_Node*)*proj_count));
+    TB_Node* n = tb_alloc_node(f, TB_CALL, TB_TYPE_TUPLE, 3 + param_count, sizeof(TB_NodeCall));
     set_input(f, n, target, 2);
     FOR_N(i, 0, param_count) {
         set_input(f, n, params[i], i + 3);
@@ -496,26 +499,28 @@ TB_MultiOutput tb_inst_call(TB_Function* f, TB_FunctionPrototype* proto, TB_Node
     TB_Node* mproj = tb__make_proj(f, TB_TYPE_MEMORY, n, 1);
     set_input(f, n, append_mem(f, mproj), 1);
 
+    // leaked into the IR arena, don't care rn
+    TB_Node** projs = tb_arena_alloc(f->arena, sizeof(TB_Node*)*proj_count);
+
     // create data projections
     TB_PrototypeParam* rets = TB_PROTOTYPE_RETURNS(proto);
     FOR_N(i, 0, proto->return_count) {
-        c->projs[i + 2] = tb__make_proj(f, rets[i].dt, n, i + 2);
+        projs[i + 2] = tb__make_proj(f, rets[i].dt, n, i + 2);
     }
 
     // we'll slot a NULL so it's easy to tell when it's empty
     if (proto->return_count == 0) {
-        c->projs[2] = NULL;
+        projs[2] = NULL;
     }
 
-    c->projs[0] = cproj;
-    c->projs[1] = mproj;
-
+    projs[0] = cproj;
+    projs[1] = mproj;
     add_input_late(f, get_callgraph(f), n);
 
     if (proto->return_count == 1) {
-        return (TB_MultiOutput){ .count = proto->return_count, .single = c->projs[2] };
+        return (TB_MultiOutput){ .count = proto->return_count, .single = projs[2] };
     } else {
-        return (TB_MultiOutput){ .count = proto->return_count, .multiple = c->projs + 2 };
+        return (TB_MultiOutput){ .count = proto->return_count, .multiple = &projs[2] };
     }
 }
 
@@ -929,7 +934,7 @@ void add_input_late(TB_Function* f, TB_Node* n, TB_Node* in) {
     }
 
     n->inputs[n->input_count] = in;
-    add_user(f, n, in, n->input_count, NULL);
+    add_user(f, n, in, n->input_count);
     n->input_count += 1;
 }
 
@@ -957,14 +962,17 @@ TB_Node* tb_inst_if(TB_Function* f, TB_Node* cond, TB_Node* if_true, TB_Node* if
     TB_Node* mem_state = peek_mem(f);
 
     // generate control projections
-    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch) + sizeof(TB_BranchKey));
+    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch));
     set_input(f, n, transfer_ctrl(f, NULL), 0);
     set_input(f, n, cond, 1);
 
     FOR_N(i, 0, 2) {
         TB_Node* target = i ? if_false : if_true;
 
-        TB_Node* cproj = tb__make_proj(f, TB_TYPE_CONTROL, n, i);
+        TB_Node* cproj = tb_alloc_node(f, TB_BRANCH_PROJ, TB_TYPE_CONTROL, 1, sizeof(TB_NodeBranchProj));
+        set_input(f, cproj, n, 0);
+        TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 50, .key = 0);
+
         add_input_late(f, target, cproj);
         add_memory_edge(f, n, mem_state, target);
     }
@@ -972,8 +980,6 @@ TB_Node* tb_inst_if(TB_Function* f, TB_Node* cond, TB_Node* if_true, TB_Node* if
     TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
     br->total_hits = 100;
     br->succ_count  = 2;
-    br->keys[0].key = 0;
-    br->keys[0].taken = 50;
     return n;
 }
 
@@ -981,42 +987,47 @@ TB_Node* tb_inst_if2(TB_Function* f, TB_Node* cond, TB_Node* projs[2]) {
     TB_Node* mem_state = peek_mem(f);
 
     // generate control projections
-    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch) + sizeof(TB_BranchKey));
+    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch));
     set_input(f, n, transfer_ctrl(f, NULL), 0);
     set_input(f, n, cond, 1);
 
     FOR_N(i, 0, 2) {
-        projs[i] = tb__make_proj(f, TB_TYPE_CONTROL, n, i);
+        TB_Node* cproj = tb_alloc_node(f, TB_BRANCH_PROJ, TB_TYPE_CONTROL, 1, sizeof(TB_NodeBranchProj));
+        set_input(f, cproj, n, 0);
+        TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 50, .key = 0);
+        projs[i] = cproj;
     }
 
     TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
     br->total_hits = 100;
     br->succ_count = 2;
-    br->keys[0].key = 0;
-    br->keys[0].taken = 50;
     return n;
 }
 
 // n is a TB_BRANCH with two successors, taken is the number of times it's true
 void tb_inst_set_branch_freq(TB_Function* f, TB_Node* n, int total_hits, int taken) {
-    TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
-    assert(br->succ_count == 2 && "only works on if-branches");
-    br->total_hits = total_hits;
-    br->keys[0].taken = total_hits - taken;
+    tb_todo();
 }
 
 TB_Node* tb_inst_branch(TB_Function* f, TB_DataType dt, TB_Node* key, TB_Node* default_label, size_t entry_count, const TB_SwitchEntry* entries) {
     TB_Node* mem_state = peek_mem(f);
 
     // generate control projections
-    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch) + (sizeof(TB_BranchKey) * entry_count));
+    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch));
     set_input(f, n, transfer_ctrl(f, NULL), 0);
     set_input(f, n, key, 1);
 
     FOR_N(i, 0, 1 + entry_count) {
         TB_Node* target = i ? entries[i - 1].value : default_label;
 
-        TB_Node* cproj = tb__make_proj(f, TB_TYPE_CONTROL, n, i);
+        TB_Node* cproj = tb_alloc_node(f, TB_BRANCH_PROJ, TB_TYPE_CONTROL, 1, sizeof(TB_NodeBranchProj));
+        set_input(f, cproj, n, 0);
+        if (i > 0) {
+            TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 10, .key = entries[i].key);
+        } else {
+            TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 10, .key = 0);
+        }
+
         add_input_late(f, target, cproj);
         add_memory_edge(f, n, mem_state, target);
     }
@@ -1024,10 +1035,6 @@ TB_Node* tb_inst_branch(TB_Function* f, TB_DataType dt, TB_Node* key, TB_Node* d
     TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
     br->total_hits = (1 + entry_count) * 10;
     br->succ_count = 1 + entry_count;
-    FOR_N(i, 0, entry_count) {
-        br->keys[i].key = entries[i].key;
-        br->keys[i].taken = 10;
-    }
     return n;
 }
 

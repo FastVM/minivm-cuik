@@ -40,6 +40,13 @@ struct TB_GraphBuilder {
     TB_Node** vals;
 };
 
+static TB_Node* branch_cproj(TB_Function* f, TB_Node* n, uint64_t taken, int64_t key, int index) {
+    TB_Node* cproj = tb_alloc_node(f, TB_BRANCH_PROJ, TB_TYPE_CONTROL, 1, sizeof(TB_NodeBranchProj));
+    set_input(f, cproj, n, 0);
+    TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = index, .taken = taken, .key = key);
+    return cproj;
+}
+
 static TB_Node* xfer_ctrl(TB_GraphBuilder* g, TB_Node* n) {
     TB_Node* prev = g->bot_ctrl;
     g->bot_ctrl = n;
@@ -370,18 +377,16 @@ void tb_builder_if(TB_GraphBuilder* g, int total_hits, int taken) {
 
     // generate branch op
     {
-        TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch) + sizeof(int64_t));
+        TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch));
         set_input(f, n, xfer_ctrl(g, NULL), 0);
         set_input(f, n, cond, 1);
 
-        ctrl->paths[0] = tb__make_proj(f, TB_TYPE_CONTROL, n, 0);
-        ctrl->paths[1] = tb__make_proj(f, TB_TYPE_CONTROL, n, 1);
+        ctrl->paths[0] = branch_cproj(f, n, taken,              0, 0);
+        ctrl->paths[1] = branch_cproj(f, n, total_hits - taken, 0, 1);
 
         TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
         br->total_hits = total_hits;
         br->succ_count = 2;
-        br->keys[0].key = 0;
-        br->keys[0].taken = total_hits - taken;
     }
 
     // add merge region (no phis yet, they'll be back)
@@ -551,18 +556,16 @@ void tb_builder_br_if(TB_GraphBuilder* g, int depth) {
     TB_Function* f = g->f;
 
     TB_Node* cond = pop(g);
-    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch) + sizeof(int64_t));
+    TB_Node* n = tb_alloc_node(f, TB_BRANCH, TB_TYPE_TUPLE, 2, sizeof(TB_NodeBranch));
     set_input(f, n, xfer_ctrl(g, NULL), 0);
     set_input(f, n, cond, 1);
 
-    TB_Node* leave    = tb__make_proj(f, TB_TYPE_CONTROL, n, 0);
-    TB_Node* fallthru = tb__make_proj(f, TB_TYPE_CONTROL, n, 1);
+    TB_Node* leave    = branch_cproj(f, n, 50, 0, 0);
+    TB_Node* fallthru = branch_cproj(f, n, 50, 0, 1);
 
     TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
     br->total_hits = 100;
     br->succ_count = 2;
-    br->keys[0].key = 0;
-    br->keys[0].taken = 50;
 
     block_jmp(g, leave, depth);
 
@@ -604,7 +607,7 @@ void tb_builder_static_call(TB_GraphBuilder* g, TB_FunctionPrototype* proto, TB_
     {
         size_t proj_count = 2 + (proto->return_count > 1 ? proto->return_count : 1);
 
-        TB_Node* n = tb_alloc_node(f, TB_CALL, TB_TYPE_TUPLE, 3 + nargs, sizeof(TB_NodeCall) + (sizeof(TB_Node*)*proj_count));
+        TB_Node* n = tb_alloc_node(f, TB_CALL, TB_TYPE_TUPLE, 3 + nargs, sizeof(TB_NodeCall));
         set_input(f, n, target_node, 2);
         FOR_N(i, 0, nargs) {
             set_input(f, n, g->vals[g->val_cnt + i], i + 3);
@@ -625,25 +628,12 @@ void tb_builder_static_call(TB_GraphBuilder* g, TB_FunctionPrototype* proto, TB_
         // create data projections
         TB_PrototypeParam* rets = TB_PROTOTYPE_RETURNS(proto);
         FOR_N(i, 0, proto->return_count) {
-            c->projs[i + 2] = tb__make_proj(f, rets[i].dt, n, i + 2);
+            TB_Node* proj = tb__make_proj(f, rets[i].dt, n, i + 2);
+            push(g, proj);
         }
-
-        // we'll slot a NULL so it's easy to tell when it's empty
-        if (proto->return_count == 0) {
-            c->projs[2] = NULL;
-        }
-
-        c->projs[0] = cproj;
-        c->projs[1] = mproj;
 
         g->vals[mem_var] = mproj;
         add_input_late(f, get_callgraph(f), n);
-
-        // push all returns
-        assert(proto->return_count < 2);
-        FOR_N(i, 0, proto->return_count) {
-            push(g, c->projs[2 + i]);
-        }
     }
 }
 
