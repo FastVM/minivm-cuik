@@ -1259,23 +1259,28 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
         }
     }
 
-    // dyn_array_set_length(ws->items, ctx->cfg.block_count);
-
     if (!cfg_is_terminator(bb->end)) {
         c_fmt_branch_edge(ctx, bb->end, true);
     }
-
-    // nl_buffer_t *buf = ctx->buf;
-    // ctx->buf = old_buf;
-    // nl_buffer_format(ctx->buf, "%s", nl_buffer_get(buf));
 }
 
-TB_API char *tb_c_prelude(TB_Module *mod) {
+TB_API TB_CBuffer *tb_c_buf_new(void) {
+    return (void *) nl_buffer_new();
+}
+
+TB_API const char *tb_c_buf_to_data(TB_CBuffer *buf) {
+    return nl_buffer_get((void *) buf);
+}
+
+TB_API void tb_c_data_free(const char *data) {
+    nl_buffer_get_free(data);
+}
+
+TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
+    nl_buffer_t *buf = (void *) c_buf;
     size_t n_private_syms = 0;
 
     void *arena = tb_arena_create(TB_ARENA_MEDIUM_CHUNK_SIZE);
-
-    nl_buffer_t *buf = nl_buffer_new();
 
     nl_buffer_format(buf, "typedef signed char int8_t;\n");
     nl_buffer_format(buf, "typedef unsigned char uint8_t;\n");
@@ -1388,16 +1393,13 @@ TB_API char *tb_c_prelude(TB_Module *mod) {
         }
     }
 
-    char *ret = nl_buffer_get(buf);
-
-    // tb_arena_destroy(arena);
-
-    return ret;
+    tb_arena_destroy(arena);
 }
 
-TB_API char* tb_print_c(TB_Function* f, TB_Worklist* ws, TB_Arena* tmp) {
-    const char *name = f->super.name;
+TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp) {
+    nl_buffer_t *buf = (void *) c_buf;
     cuikperf_region_start("print_c", NULL);
+    const char *name = f->super.name;
 
     f->tmp_arena = tmp;
     f->worklist  = ws;
@@ -1429,11 +1431,10 @@ TB_API char* tb_print_c(TB_Function* f, TB_Worklist* ws, TB_Arena* tmp) {
 
     f->worklist = NULL;
     f->scheduled = NULL;
-    cuikperf_region_end();
 
-    nl_buffer_t *buf = nl_buffer_new();
-
-    nl_buffer_format(buf, "%s\n", nl_buffer_get(ctx.globals));
+    const char *globals_get = nl_buffer_get(ctx.globals);
+    nl_buffer_format(buf, "%s\n", globals_get);
+    nl_buffer_get_free(globals_get);
     nl_buffer_format(buf, "tb2c_%s_ret_t %s(", name, name);
     TB_Node** params = f->params;
     size_t count = 0;
@@ -1450,15 +1451,15 @@ TB_API char* tb_print_c(TB_Function* f, TB_Worklist* ws, TB_Arena* tmp) {
         nl_buffer_format(buf, "void");
     }
     nl_buffer_format(buf, ") {\n");
-    nl_buffer_format(buf, "%s", nl_buffer_get(ctx.pre));
-    nl_buffer_format(buf, "%s", nl_buffer_get(ctx.buf));
+    const char *pre_get = nl_buffer_get(ctx.pre);
+    nl_buffer_format(buf, "%s", pre_get);
+    nl_buffer_get_free(pre_get);
+    const char *buf_get = nl_buffer_get(ctx.buf);
+    nl_buffer_format(buf, "%s", buf_get);
+    nl_buffer_get_free(buf_get);
     nl_buffer_format(buf, "}\n");
 
     dyn_array_destroy(ctx.visited_blocks);
 
-    char *ret = nl_buffer_get(buf);
-
-    // tb_arena_destroy(ctx.arena);
-
-    return ret;
+    cuikperf_region_end();
 }

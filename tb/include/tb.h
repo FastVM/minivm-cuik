@@ -52,6 +52,9 @@
 #  endif
 #endif
 
+struct TB_CBuffer;
+typedef struct TB_CBuffer TB_CBuffer;
+
 // These are flags
 typedef enum TB_ArithmeticBehavior {
     TB_ARITHMATIC_NONE = 0,
@@ -1479,12 +1482,28 @@ TB_API void tb_opt(TB_Function* f, TB_Worklist* ws, TB_Arena* ir, TB_Arena* tmp,
 TB_API void tb_print(TB_Function* f, TB_Arena* tmp);
 // prints IR as GraphViz's DOT
 TB_API void tb_print_dot(TB_Function* f, TB_PrintCallback callback, void* user_data);
-// p is optional
+// prints IR in a SSA format with less information than `tb_print`
 TB_API void tb_print_dumb(TB_Function* f, bool use_fancy_types);
 
-// super special experimental stuff (no touchy yet)
-TB_API char* tb_c_prelude(TB_Module* mod);
-TB_API char* tb_print_c(TB_Function* f, TB_Worklist* ws, TB_Arena* tmp);
+//////////////////////
+// TB to C Compiler //
+//////////////////////
+
+// Super special experimental stuff (no touchy yet)
+// This code was originally written by Shaw Summa (https://github.com/shawsumma/)
+
+/// Call first to create a buffer to print to
+TB_API TB_CBuffer *tb_c_buf_new(void);
+/// Call second to print the prelude needed to compile c
+TB_API void tb_c_print_prelude(TB_CBuffer *buf, TB_Module* mod);
+/// Must call `tb_c_print_prelude` first
+/// Call on each function to be printed, with its worklist and a temporary arena
+TB_API void tb_c_print_function(TB_CBuffer *buf, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp);
+/// Likely should call `tb_c_print_function` some number of times first (and `tb_c_print_function` before that)
+/// Call to get a string of c code from a buffer
+TB_API const char *tb_c_buf_to_data(TB_CBuffer *buf);
+/// Call to cleanup (free) the `const char *` from `tb_c_buf_to_data`
+TB_API void tb_c_data_free(const char *data);
 
 // codegen:
 //   output goes at the top of the code_arena, feel free to place multiple functions

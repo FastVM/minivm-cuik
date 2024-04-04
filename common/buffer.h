@@ -14,10 +14,12 @@ struct nl_buffer_t {
 };
 
 nl_buffer_t *nl_buffer_new(void);
-void nl_buffer_alloc(nl_buffer_t *buf);
+void nl_buffer_free(nl_buffer_t *buf);
+
+const char *nl_buffer_get(nl_buffer_t *buf);
+void nl_buffer_get_free(const char *str);
 
 void nl_buffer_format(nl_buffer_t *buf, const char *fmt, ...);
-char *nl_buffer_get(nl_buffer_t *buf);
 
 #ifdef NL_BUFFER_IMPL
 
@@ -30,15 +32,22 @@ nl_buffer_t *nl_buffer_new(void) {
     return buf;
 }
 
+void nl_buffer_free(nl_buffer_t *buf) {
+    NL_FREE(buf);
+}
+
+void nl_buffer_get_free(const char *str) {
+    NL_FREE((void*) str);
+}
+
 void nl_buffer_format(nl_buffer_t *buf, const char *restrict fmt, ...) {
     while (true) {
-        int avail = buf->alloc - buf->len;
         va_list ap;
         va_start(ap, fmt);
-        int written = vsnprintf(&buf->buf[buf->len], avail, fmt, ap);
+        int written = vsnprintf(&buf->buf[buf->len], buf->alloc - buf->len, fmt, ap);
         va_end(ap);
-        if (avail <= written) {
-            buf->alloc = buf->alloc * 2 + 16;
+        if (buf->len + written >= buf->alloc) {
+            buf->alloc = buf->alloc + buf->alloc / 2 + written;
             buf->buf = NL_REALLOC(buf->buf, buf->alloc);
             continue;
         }
@@ -47,8 +56,10 @@ void nl_buffer_format(nl_buffer_t *buf, const char *restrict fmt, ...) {
     }
 }
 
-char *nl_buffer_get(nl_buffer_t *buf) {
-    return buf->buf;
+const char *nl_buffer_get(nl_buffer_t *buf) {
+    const char *ret = buf->buf;
+    NL_FREE(buf);
+    return ret;
 }
 
 #endif
