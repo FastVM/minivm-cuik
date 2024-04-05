@@ -112,6 +112,7 @@ static bool c_fmt_will_inline(TB_Node *n) {
         case TB_REGION: case TB_NATURAL_LOOP: case TB_AFFINE_LOOP:
         case TB_FLOAT32_CONST: case TB_FLOAT64_CONST:
         case TB_SYMBOL: case TB_ZERO_EXT: case TB_SIGN_EXT:
+        case TB_BRANCH_PROJ: 
         return true;
 
         case TB_PROJ: if (n->dt.type == TB_CONTROL) { return true; }
@@ -389,7 +390,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
         }
 
         c_fmt_spaces(ctx);
-        nl_buffer_format(ctx->buf, "{ // phi moves\n");
+        nl_buffer_format(ctx->buf, "{\n");
         ctx->depth += 1;
         size_t has_phi = 0;
         FOR_USERS(u, target) {
@@ -463,25 +464,25 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             continue;
         }
 
-        if (n->type == TB_MERGEMEM || n->type == TB_SPLITMEM || n->type == TB_NULL || n->type == TB_PHI || n->type == TB_PROJ) {
+        if (n->type == TB_MERGEMEM || n->type == TB_SPLITMEM || n->type == TB_NULL || n->type == TB_PHI || n->type == TB_PROJ || n->type == TB_BRANCH_PROJ) {
             continue;
         }
 
         switch (n->type) {
             case TB_DEAD: {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "// dead\n");
+                // c_fmt_spaces(ctx);
+                // nl_buffer_format(ctx->buf, "// dead\n");
                 break;
             }
 
             case TB_DEBUGBREAK: {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "// debugbreak\n");
+                // c_fmt_spaces(ctx);
+                // nl_buffer_format(ctx->buf, "// debugbreak\n");
                 break;
             }
             case TB_UNREACHABLE: {
-                c_fmt_spaces(ctx);
-                nl_buffer_format(ctx->buf, "// unreachable\n");
+                // c_fmt_spaces(ctx);
+                // nl_buffer_format(ctx->buf, "// unreachable\n");
                 break;
             }
 
@@ -494,8 +495,8 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
 
                 // fill successors
                 FOR_USERS(u, n) {
-                    if (USERN(u)->type == TB_PROJ) {
-                        int index = TB_NODE_GET_EXTRA_T(USERN(u), TB_NodeProj)->index;
+                    if (USERN(u)->type == TB_BRANCH_PROJ) {
+                        int index = TB_NODE_GET_EXTRA_T(USERN(u), TB_NodeBranchProj)->index;
                         succ[index] = USERN(u);
                         succ_count += 1;
                     }
@@ -1133,7 +1134,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 } else {
                     nl_buffer_format(ctx->globals, "typedef struct {\n");
                     FOR_N(i, 2, 4) {
-                        if (projs[i] == NULL) break;
+                if (projs[i] == NULL) break;
                         nl_buffer_format(ctx->globals, "  %s v%u;\n", c_fmt_type_name(projs[i]->dt), projs[i]->gvn);
                     }
                     nl_buffer_format(ctx->globals, "} tb2c_%s_v%u_ret_t;\n", ctx->name, n->gvn);
@@ -1337,6 +1338,7 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
                         nl_buffer_format(buf, "  0x%02x,\n", data_buf[i]);
                     }
                     nl_buffer_format(buf, "};\n");
+                    tb_platform_heap_free(data_buf);
                 }
                 // nl_buffer_format(buf, "// global: %s\n", sym->name);
                 break;
@@ -1404,9 +1406,9 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     ctx.pre = nl_buffer_new();
 
     // ctx.global_funcs = nl_hashset_alloc(ctx.module->compiled_function_count);
+    ctx.declared_vars = nl_hashset_alloc(16);
     ctx.declared_types = nl_hashset_alloc(4);
     ctx.visited_blocks = dyn_array_create(size_t, 8);
-    ctx.declared_vars = nl_hashset_alloc(16);
     ctx.block_ranges = nl_table_alloc(ctx.cfg.block_count);
 
     // nl_hashset_clear(&ctx.visited_blocks);
@@ -1453,7 +1455,15 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     nl_buffer_get_free(buf_get);
     nl_buffer_format(buf, "}\n");
 
+    nl_hashset_free(ctx.declared_vars);
+    nl_hashset_free(ctx.declared_types);
     dyn_array_destroy(ctx.visited_blocks);
+
+    nl_table_for(p, &ctx.block_ranges) {
+        tb_platform_heap_free(p->v);
+    }
+
+    nl_table_free(ctx.block_ranges);
 
     cuikperf_region_end();
 }

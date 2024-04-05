@@ -494,7 +494,7 @@ static TB_Node* node_isel(Ctx* restrict ctx, TB_Function* f, TB_Node* n) {
             return k;
 
             SUBMIT(inst_op_global(FP_MOV, n->dt, dst, (TB_Symbol*) g));*/
-            __debugbreak();
+            // __debugbreak();
             return n;
         }
     } else if (n->type == TB_BITCAST || n->type == TB_TRUNCATE) {
