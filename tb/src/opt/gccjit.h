@@ -867,10 +867,8 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
 }
 
 TB_API void *tb_gcc_function_ptr(TB_GCCJIT_Function *func) {
-    // gcc_jit_context_set_bool_option(func->mod->ctx, GCC_JIT_BOOL_OPTION_DUMP_INITIAL_TREE, true);
-    // gcc_jit_context_set_bool_option(func->mod->ctx, GCC_JIT_BOOL_OPTION_DUMP_INITIAL_GIMPLE, true);
-    // gcc_jit_context_set_bool_option(func->mod->ctx, GCC_JIT_BOOL_OPTION_DUMP_GENERATED_CODE, true);
-    gcc_jit_context_set_int_option(func->mod->ctx, GCC_JIT_INT_OPTION_OPTIMIZATION_LEVEL, 2);
+    gcc_jit_context_add_command_line_option(func->mod->ctx, "-O2");
     gcc_jit_result *res = gcc_jit_context_compile(func->mod->ctx);
+    gcc_jit_context_release(func->mod->ctx);
     return gcc_jit_result_get_code(res, func->name);
 }
