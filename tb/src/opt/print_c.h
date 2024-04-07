@@ -262,8 +262,7 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
                 nl_buffer_format(ctx->buf, "%s", sym->name);
             }
         } else if (ctx->module->is_jit) {
-            void *addr = sym->address;
-            nl_buffer_format(ctx->buf, "(void*)%p", TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym->address);
+            nl_buffer_format(ctx->buf, "(void*)%p", sym->address);
         } else {
             switch((int) sym->tag) {
                 case TB_SYMBOL_EXTERNAL: {
@@ -1121,7 +1120,9 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 } else {
                     nl_buffer_format(ctx->globals, "typedef struct {\n");
                     FOR_N(i, 2, 4) {
-                if (projs[i] == NULL) break;
+                        if (projs[i] == NULL) {
+                            break;
+                        }
                         nl_buffer_format(ctx->globals, "  %s v%u;\n", c_fmt_type_name(projs[i]->dt), projs[i]->gvn);
                     }
                     nl_buffer_format(ctx->globals, "} tb2c_%s_v%u_ret_t;\n", ctx->name, n->gvn);
