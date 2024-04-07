@@ -21,7 +21,7 @@ typedef struct TB_GCCJIT_Context {
     TB_Function *tb_func;
     size_t gcc_func_num_return_fields;
     gcc_jit_field ** gcc_func_return_fields;
-    gcc_jit_struct *gcc_func_return;
+    gcc_jit_type *gcc_func_return;
     gcc_jit_function *gcc_func;
 } TB_GCCJIT_Context;
 
@@ -80,55 +80,65 @@ static gcc_jit_type *tb_gcc_type(TB_GCCJIT_Context *ctx, TB_DataType dt) {
     tb_todo();
 }
 
-static gcc_jit_block *tb_gcc_branch(TB_GCCJIT_Context *ctx, TB_Node *n) {
-    TB_Node *target = cfg_next_bb_after_cproj(n);
-    gcc_jit_block *base = nl_table_get(&ctx->blocks, n);
-    if (cfg_is_region(target)) {
-        gcc_jit_block *ret = gcc_jit_function_new_block(ctx->gcc_func, NULL);
-        
-        int phi_i = -1;
-        FOR_USERS(u, n) {
-            if (cfg_is_region(USERN(u))) {
-                phi_i = 1 + USERI(u);
-                break;
-            }
-        }
+static gcc_jit_block *tb_gcc_branch_ext(TB_GCCJIT_Context *ctx, TB_Node *n, TB_Node *target) {
+    gcc_jit_block *base = nl_table_get(&ctx->blocks, target);
+    if (!cfg_is_region(target)) {
+        return base;
+    }
 
-        FOR_USERS(u, target) {
-            TB_Node *dest = USERN(u);
-            if (dest->type == TB_PHI) {
-                assert(phi_i >= 0);
-                if (dest->inputs[phi_i] != NULL) {
-                    if (dest->inputs[phi_i]->dt.type != TB_CONTROL && dest->inputs[phi_i]->dt.type != TB_MEMORY) {
-                        TB_Node *src = dest->inputs[phi_i];
-                        gcc_jit_lvalue *lval = nl_table_get(&ctx->phi, dest);
-                        if (lval == NULL) {
-                            char dest_name[24];
-                            snprintf(dest_name, 23, "phi_%zu", (size_t) dest->gvn);
-                            lval = gcc_jit_function_new_local(
-                                ctx->gcc_func,
-                                NULL,
-                                tb_gcc_type(ctx, dest->dt),
-                                dest_name
-                            );
-                            nl_table_put(&ctx->phi, dest, lval);
-                        }
-                        gcc_jit_block_add_assignment(
-                            ret,
+    char ret_name[24];
+    snprintf(ret_name, 23, "bb_phi_%zu", (size_t) n->gvn);
+    gcc_jit_block *ret = gcc_jit_function_new_block(ctx->gcc_func, ret_name);
+    
+    int phi_i = -1;
+    FOR_USERS(u, n) {
+        if (cfg_is_region(USERN(u))) {
+            phi_i = 1 + USERI(u);
+            break;
+        }
+    }
+
+    FOR_USERS(u, target) {
+        TB_Node *dest = USERN(u);
+        if (dest->type == TB_PHI) {
+            assert(phi_i >= 0);
+            if (dest->inputs[phi_i] != NULL) {
+                if (dest->inputs[phi_i]->dt.type != TB_CONTROL && dest->inputs[phi_i]->dt.type != TB_MEMORY) {
+                    TB_Node *src = dest->inputs[phi_i];
+                    gcc_jit_lvalue *lval = nl_table_get(&ctx->phi, dest);
+                    if (lval == NULL) {
+                        char dest_name[24];
+                        snprintf(dest_name, 23, "phi_%zu", (size_t) dest->gvn);
+                        lval = gcc_jit_function_new_local(
+                            ctx->gcc_func,
                             NULL,
-                            lval,
-                            tb_gcc_get(&ctx->values, src)
+                            tb_gcc_type(ctx, dest->dt),
+                            dest_name
                         );
+                        nl_table_put(&ctx->phi, dest, lval);
                     }
+                    gcc_jit_block_add_assignment(
+                        ret,
+                        NULL,
+                        lval,
+                        tb_gcc_get(&ctx->values, src)
+                    );
                 }
             }
         }
-
-        gcc_jit_block_end_with_jump(ret, NULL, base);
-
-        return ret;
     }
-    return base;
+
+    gcc_jit_block_end_with_jump(ret, NULL, base);
+
+    return ret;
+}
+
+static gcc_jit_block *tb_gcc_branch(TB_GCCJIT_Context *ctx, TB_Node *n) {
+    return tb_gcc_branch_ext(ctx, n, cfg_next_bb_after_cproj(n));
+}
+
+static gcc_jit_block *tb_gcc_branch_fall(TB_GCCJIT_Context *ctx, TB_Node *n) {
+    return tb_gcc_branch_ext(ctx, n, cfg_next_control(n));
 }
 
 static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *cfg, TB_Worklist *ws, TB_Node* start) {
@@ -140,7 +150,7 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
 
     FOR_USERS(u, start) {
         TB_Node *dest = USERN(u);
-        if (dest->dt.type == TB_CONTROL || dest->dt.type == TB_MEMORY) {
+        if (dest->dt.type == TB_CONTROL || dest->dt.type == TB_MEMORY || dest->dt.type == TB_TUPLE) {
             continue;
         }
         gcc_jit_lvalue *lval = nl_table_get(&ctx->phi, dest);
@@ -165,14 +175,31 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
     FOR_N(i, foreach_start, foreach_end) {
         TB_Node* n = ws->items[i];
 
-        fprintf(stdout, "v%zu of %s\n", (size_t) n->gvn, tb_node_get_name(n));
-
         if (n->type == TB_MERGEMEM || n->type == TB_SPLITMEM || n->type == TB_NULL
             || n->type == TB_PHI || n->type == TB_PROJ || n->type == TB_BRANCH_PROJ
             || n->type == TB_REGION) {
             continue;
         }
+
         switch (n->type) {
+            case TB_SYMBOL: {
+                TB_Symbol* sym = TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym;
+                if (ctx->mod->tb->is_jit) {
+                    tb_gcc_set(
+                        &ctx->values,
+                        n,
+                        gcc_jit_context_new_rvalue_from_ptr(
+                            ctx->mod->ctx,
+                            gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_VOID_PTR),
+                            sym->address
+                        )
+                    );
+                } else {
+                    goto fail;
+                }
+
+                break;
+            }
             case TB_INTEGER_CONST: {
                 TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
 
@@ -199,6 +226,44 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                 }
                 break;
             }
+            case TB_ADD:
+            case TB_SUB:
+            case TB_MUL:
+            case TB_SDIV:
+            case TB_UDIV:
+            case TB_FDIV:
+            case TB_SMOD:
+            case TB_UMOD: {
+                static const char table[] = {
+                    [TB_ADD] = GCC_JIT_BINARY_OP_PLUS,
+                    [TB_SUB] = GCC_JIT_BINARY_OP_MINUS,
+                    [TB_MUL] = GCC_JIT_BINARY_OP_MULT,
+                    [TB_SDIV] = GCC_JIT_BINARY_OP_DIVIDE,
+                    [TB_UDIV] = GCC_JIT_BINARY_OP_DIVIDE,
+                    [TB_FDIV] = GCC_JIT_BINARY_OP_DIVIDE,
+                    [TB_SMOD] = GCC_JIT_BINARY_OP_MODULO,
+                    [TB_UMOD] = GCC_JIT_BINARY_OP_MODULO,
+                };
+
+                TB_Node *lhs = n->inputs[n->input_count-2];
+                TB_Node *rhs = n->inputs[n->input_count-1];
+
+                tb_gcc_set(
+                    &ctx->values,
+                    n,
+                    gcc_jit_context_new_binary_op(
+                        ctx->mod->ctx,
+                        NULL,
+                        table[n->type],
+                        tb_gcc_type(ctx, n->dt),
+                        tb_gcc_get(&ctx->values, lhs),
+                        tb_gcc_get(&ctx->values, rhs)
+                    )
+                );
+
+                break;
+            }
+
             case TB_CMP_EQ:
             case TB_CMP_NE:
             case TB_CMP_SLT:
@@ -289,7 +354,7 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                                 ctx->mod->ctx,
                                 NULL,
                                 tb_gcc_get(&ctx->values, src),
-                                gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_VOID_PTR)
+                                gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_CONST_CHAR_PTR)
                             ),
                             gcc_jit_context_new_rvalue_from_int(
                                 ctx->mod->ctx,
@@ -319,7 +384,7 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                                 ctx->mod->ctx,
                                 NULL,
                                 tb_gcc_get(&ctx->values, array),
-                                gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_VOID_PTR)
+                                gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_CONST_CHAR_PTR)
                             ),
                             gcc_jit_context_new_binary_op(
                                 ctx->mod->ctx,
@@ -342,6 +407,9 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                         NULL
                     )
                 );
+
+                // \n", gcc_jit_object_get_debug_string(gcc_jit_rvalue_as_object(tb_gcc_get(&ctx->values, n))));
+
                 break;
             }
             case TB_BITCAST: {
@@ -394,24 +462,6 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
 
                 break;
             }
-            case TB_SYMBOL: {
-                TB_Symbol* sym = TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym;
-                if (ctx->mod->tb->is_jit) {
-                    tb_gcc_set(
-                        &ctx->values,
-                        n,
-                        gcc_jit_context_new_rvalue_from_ptr(
-                            ctx->mod->ctx,
-                            gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_VOID_PTR),
-                            sym->address
-                        )
-                    );
-                    // nl_buffer_format(ctx->buf, "(void*)%p", );
-                } else {
-                    goto fail;
-                }
-        break;
-            }
             case TB_STORE: {
                 TB_Node *dest = n->inputs[n->input_count-2];
                 TB_Node *src = n->inputs[n->input_count-1];
@@ -423,14 +473,14 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                         gcc_jit_context_new_bitcast(
                             ctx->mod->ctx,
                             NULL,
-                            tb_gcc_get(&ctx->values, src),
+                            tb_gcc_get(&ctx->values, dest),
                             gcc_jit_type_get_pointer(
-                                tb_gcc_type(ctx, dest->dt)
+                                tb_gcc_type(ctx, src->dt)
                             )
                         ),
                         NULL
                     ),
-                    tb_gcc_get(&ctx->values, dest)
+                    tb_gcc_get(&ctx->values, src)
                 );
                 break;
             }
@@ -446,11 +496,13 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                     name
                 );
                 
+                gcc_jit_rvalue *v1;
+                
                 gcc_jit_block_add_assignment(
                     block,
                     NULL,
                     local,
-                    gcc_jit_lvalue_as_rvalue(
+                    v1 = gcc_jit_lvalue_as_rvalue(
                         gcc_jit_rvalue_dereference(
                             gcc_jit_context_new_cast(
                                 ctx->mod->ctx,
@@ -464,6 +516,8 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                         )
                     )
                 );
+
+                // printf("%s %s = %s\n", gcc_jit_object_get_debug_string(gcc_jit_type_as_object(tb_gcc_type(ctx, n->dt))), gcc_jit_object_get_debug_string(gcc_jit_lvalue_as_object(local)), gcc_jit_object_get_debug_string(gcc_jit_rvalue_as_object(v1)));
 
                 tb_gcc_set(
                     &ctx->values,
@@ -501,28 +555,20 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
             }
             case TB_RETURN: {
                 size_t count = n->input_count - 3;
-                if (count == 0) {
+
+                // printf("%zu == %zu\n", ctx->gcc_func_num_return_fields, count);
+
+                if (ctx->gcc_func_num_return_fields == 0) {
                     gcc_jit_block_end_with_void_return(block, NULL);
-                } else if (count == 1) {
+                } else if (ctx->gcc_func_num_return_fields == 1) {
                     TB_Node *src = n->inputs[n->input_count - 1];
-                    
-                    gcc_jit_rvalue *values[1] = {
-                        tb_gcc_get(&ctx->values, src),
-                    };
                     
                     gcc_jit_block_end_with_return(
                         block,
                         NULL, 
-                        gcc_jit_context_new_struct_constructor(
-                            ctx->mod->ctx,
-                            NULL,
-                            gcc_jit_struct_as_type(ctx->gcc_func_return),
-                            ctx->gcc_func_num_return_fields,
-                            ctx->gcc_func_return_fields,
-                            values
-                        )
+                        tb_gcc_get(&ctx->values, src)
                     );
-                } else if (count == 2) {
+                } else if (ctx->gcc_func_num_return_fields == 2) {
                     TB_Node *car = n->inputs[n->input_count - 2];
                     TB_Node *cdr = n->inputs[n->input_count - 1];
 
@@ -537,7 +583,7 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                         gcc_jit_context_new_struct_constructor(
                             ctx->mod->ctx,
                             NULL,
-                            gcc_jit_struct_as_type(ctx->gcc_func_return),
+                            ctx->gcc_func_return,
                             ctx->gcc_func_num_return_fields,
                             ctx->gcc_func_return_fields,
                             values
@@ -561,8 +607,7 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                 gcc_jit_type *ret = NULL;
                 
                 gcc_jit_field *fields[2];
-                gcc_jit_struct *s;
-
+                
                 if (projs[0] == NULL) {
                     ret = gcc_jit_context_get_type(ctx->mod->ctx, GCC_JIT_TYPE_VOID);
                 } else if (projs[1] == NULL) {
@@ -572,8 +617,10 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                     snprintf(buf, 23, "ret_%zu", (size_t) n->gvn);
                     fields[0] = gcc_jit_context_new_field(ctx->mod->ctx, NULL, tb_gcc_type(ctx, projs[0]->dt), "member_1");
                     fields[1] = gcc_jit_context_new_field(ctx->mod->ctx, NULL, tb_gcc_type(ctx, projs[1]->dt), "member_2");
-                    s = gcc_jit_context_new_struct_type(ctx->mod->ctx, NULL, buf, 2, fields);
+                    gcc_jit_struct *s = gcc_jit_context_new_struct_type(ctx->mod->ctx, NULL, buf, 2, fields);
                     ret = gcc_jit_struct_as_type(s);
+                    // printf("%s %s\n", gcc_jit_object_get_debug_string(gcc_jit_type_as_object(tb_gcc_type(ctx, projs[0]->dt))), gcc_jit_object_get_debug_string(gcc_jit_field_as_object(fields[0])));
+                    // printf("%s %s\n", gcc_jit_object_get_debug_string(gcc_jit_type_as_object(tb_gcc_type(ctx, projs[1]->dt))), gcc_jit_object_get_debug_string(gcc_jit_field_as_object(fields[1])));
                 }
                 
                 size_t num_params = n->input_count - 3;
@@ -590,31 +637,50 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                     args[i] = tb_gcc_get(&ctx->values, n->inputs[i + 3]);
                 }
 
-                printf("%p %p\n", projs[0], projs[1]);
-
                 if (projs[0] == NULL) {
-                } else {
-                    char ret_name[24];
-                    snprintf(ret_name, 23, "local_%zu", (size_t) n->gvn);
-                    gcc_jit_lvalue *local = gcc_jit_function_new_local(ctx->gcc_func, NULL, ret, ret_name);
-
-                    gcc_jit_block_add_assignment(
+                    gcc_jit_block_add_eval(
                         block,
                         NULL,
-                        local,
                         gcc_jit_context_new_call_through_ptr(
                             ctx->mod->ctx,
                             NULL,
-                            gcc_jit_context_new_cast(
+                            gcc_jit_context_new_bitcast(
                                 ctx->mod->ctx,
                                 NULL,
-                                tb_gcc_get(&ctx->values, n->inputs[2]),
+                                tb_gcc_get(&ctx->values, func),
                                 gcc_jit_context_new_function_ptr_type(ctx->mod->ctx, NULL, ret, num_params, params, false)
                             ),
                             num_args,
                             args
                         )
                     );
+                } else {
+                    char ret_name[24];
+                    snprintf(ret_name, 23, "local_%zu", (size_t) n->gvn);
+                    gcc_jit_lvalue *local = gcc_jit_function_new_local(ctx->gcc_func, NULL, ret, ret_name);
+
+                    gcc_jit_rvalue *v1;
+
+                    gcc_jit_block_add_assignment(
+                        block,
+                        NULL,
+                        local,
+                        v1 = gcc_jit_context_new_call_through_ptr(
+                            ctx->mod->ctx,
+                            NULL,
+                            gcc_jit_context_new_bitcast(
+                                ctx->mod->ctx,
+                                NULL,
+                                tb_gcc_get(&ctx->values, func),
+                                gcc_jit_context_new_function_ptr_type(ctx->mod->ctx, NULL, ret, num_params, params, false)
+                            ),
+                            num_args,
+                            args
+                        )
+                    );
+
+                    // printf("%s\n", gcc_jit_object_get_debug_string(gcc_jit_block_as_object(block)));
+                    // printf("%s %s = %s\n", gcc_jit_object_get_debug_string(gcc_jit_type_as_object(ret)), gcc_jit_object_get_debug_string(gcc_jit_lvalue_as_object(local)), gcc_jit_object_get_debug_string(gcc_jit_rvalue_as_object(v1)));
 
                     if (projs[1] == NULL) {
                         tb_gcc_set(
@@ -655,13 +721,7 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                     }
                 }
 
-                if (succ_count == 1) {
-                    gcc_jit_block_end_with_jump(
-                        block,
-                        NULL,
-                        tb_gcc_branch(ctx, succ[0])
-                    );
-                } else if (succ_count == 2) {
+                if (succ_count == 2) {
                     gcc_jit_block_end_with_conditional(
                         block,
                         NULL,
@@ -673,8 +733,6 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                     goto fail;
                 }
 
-                tb_platform_heap_free(succ);
-
                 break;
             }
 
@@ -685,6 +743,14 @@ static void tb_gcc_block(TB_GCCJIT_Context *ctx, gcc_jit_block *block, TB_CFG *c
                 break;
             } 
         }
+    }
+
+    if (!cfg_is_terminator(bb->end)) {
+        gcc_jit_block_end_with_jump(
+            block,
+            NULL,
+            tb_gcc_branch_fall(ctx, bb->end)
+        );
     }
 }
 
@@ -710,19 +776,27 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
     };
 
     ctx.gcc_func_num_return_fields = f->prototype->return_count;
-    ctx.gcc_func_return_fields = tb_platform_heap_alloc(sizeof(gcc_jit_type *) * ctx.gcc_func_num_return_fields);
-    for (size_t i = 0; i < ctx.gcc_func_num_return_fields; i++) {
-        char name[24];
-        snprintf(name, 23, "ret_%zu", i);
-        ctx.gcc_func_return_fields[i] = gcc_jit_context_new_field(
-            mod->ctx,
-            NULL,
-            tb_gcc_type(&ctx, f->prototype->params[f->prototype->param_count + i].dt),
-            name
+    if (ctx.gcc_func_num_return_fields == 0) {
+        ctx.gcc_func_return = gcc_jit_context_get_type(mod->ctx, GCC_JIT_TYPE_VOID);
+    } else if (ctx.gcc_func_num_return_fields == 1) {
+        ctx.gcc_func_return = tb_gcc_type(&ctx, f->prototype->params[f->prototype->param_count].dt);
+    } else {
+        ctx.gcc_func_return_fields = tb_platform_heap_alloc(sizeof(gcc_jit_type *) * ctx.gcc_func_num_return_fields);
+        for (size_t i = 0; i < ctx.gcc_func_num_return_fields; i++) {
+            char name[24];
+            snprintf(name, 23, "ret_%zu", i);
+            ctx.gcc_func_return_fields[i] = gcc_jit_context_new_field(
+                mod->ctx,
+                NULL,
+                tb_gcc_type(&ctx, f->prototype->params[f->prototype->param_count + i].dt),
+                name
+            );
+        }
+        ctx.gcc_func_return = gcc_jit_struct_as_type(
+            gcc_jit_context_new_struct_type(mod->ctx, NULL, "func_ret", ctx.gcc_func_num_return_fields, ctx.gcc_func_return_fields)
         );
     }
-    ctx.gcc_func_return = gcc_jit_context_new_struct_type(mod->ctx, NULL, "func_ret", ctx.gcc_func_num_return_fields, ctx.gcc_func_return_fields);
-    size_t num_params = 0;
+    size_t num_params = f->param_count;
     gcc_jit_param **params = tb_platform_heap_alloc(sizeof(gcc_jit_type *) * num_params);
     for (size_t i = 0; i < num_params; i++) {
         // params[i] = tb_gcc_type();
@@ -738,7 +812,16 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
     char *fname = tb_platform_heap_alloc(sizeof(char) * 24);
     snprintf(fname, 23, "func_%zu", ++ mod->nfuncs);
 
-    ctx.gcc_func = gcc_jit_context_new_function(mod->ctx, NULL, GCC_JIT_FUNCTION_EXPORTED, gcc_jit_struct_as_type(ctx.gcc_func_return), fname, num_params, params, false);
+    ctx.gcc_func = gcc_jit_context_new_function(mod->ctx, NULL, GCC_JIT_FUNCTION_EXPORTED, ctx.gcc_func_return, fname, num_params, params, false);
+
+    FOR_N(i, 0, num_params) {
+        TB_Node *param = f->params[i + 3];
+        tb_gcc_set(
+            &ctx.values,
+            param,
+            gcc_jit_param_as_rvalue(params[i])
+        );
+    }
 
     f->tmp_arena = tmp;
     f->worklist  = ws;
@@ -755,7 +838,9 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
         char block_name[64] = {0};
         if (start->type == TB_REGION) {
             TB_NodeRegion *node = TB_NODE_GET_EXTRA(start);
-            snprintf(block_name, 63, "bb_%zu_%s", (size_t) start->gvn, node->tag);
+            if (node->tag != NULL) {
+                snprintf(block_name, 63, "bb_%zu_%s", (size_t) start->gvn, node->tag);
+            }
         }
         if (block_name[0] == '\0') {
             snprintf(block_name, 63, "bb_%zu", (size_t) start->gvn);
@@ -765,7 +850,8 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
     }
 
     FOR_N(i, 0, cfg.block_count) {
-        tb_gcc_block(&ctx, blocks[i], &cfg, ws, ws->items[i]);
+        TB_Node *start = ws->items[i];
+        tb_gcc_block(&ctx, blocks[i], &cfg, ws, start);
     }
 
     tb_free_cfg(&cfg);
@@ -776,10 +862,15 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
         .func = ctx.gcc_func,
         .name = fname,
     };
+
     return ret;
 }
 
 TB_API void *tb_gcc_function_ptr(TB_GCCJIT_Function *func) {
+    // gcc_jit_context_set_bool_option(func->mod->ctx, GCC_JIT_BOOL_OPTION_DUMP_INITIAL_TREE, true);
+    // gcc_jit_context_set_bool_option(func->mod->ctx, GCC_JIT_BOOL_OPTION_DUMP_INITIAL_GIMPLE, true);
+    // gcc_jit_context_set_bool_option(func->mod->ctx, GCC_JIT_BOOL_OPTION_DUMP_GENERATED_CODE, true);
+    gcc_jit_context_set_int_option(func->mod->ctx, GCC_JIT_INT_OPTION_OPTIMIZATION_LEVEL, 2);
     gcc_jit_result *res = gcc_jit_context_compile(func->mod->ctx);
     return gcc_jit_result_get_code(res, func->name);
 }
