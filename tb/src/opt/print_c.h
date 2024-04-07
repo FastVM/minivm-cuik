@@ -5,18 +5,6 @@
 #include <buffer.h>
 
 typedef struct {
-    size_t gvn;
-    size_t label;
-    bool used: 1;
-} CFmtFrame;
-
-typedef struct {
-    size_t gvn;
-    size_t label;
-    bool used: 1;
-} CFmtFallNext;
-
-typedef struct {
     size_t low;
     size_t high;
 } CFmtBlockRange;
@@ -28,7 +16,6 @@ typedef struct {
     size_t a;
     size_t num_labels;
     NL_HashSet declared_types;
-    DynArray(CFmtFrame *) visited_blocks;
     NL_Table block_ranges;
     TB_CFG cfg;
     NL_HashSet declared_vars;
@@ -57,7 +44,7 @@ static const char *c_fmt_type_name(TB_DataType dt) {
             if (dt.data <= 16) return  "uint16_t";
             if (dt.data <= 32) return  "uint32_t";
             if (dt.data <= 64) return  "uint64_t";
-            else __builtin_trap();
+            tb_todo();
             break;
         }
         case TB_PTR: {
@@ -1408,10 +1395,8 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     // ctx.global_funcs = nl_hashset_alloc(ctx.module->compiled_function_count);
     ctx.declared_vars = nl_hashset_alloc(16);
     ctx.declared_types = nl_hashset_alloc(4);
-    ctx.visited_blocks = dyn_array_create(size_t, 8);
     ctx.block_ranges = nl_table_alloc(ctx.cfg.block_count);
 
-    // nl_hashset_clear(&ctx.visited_blocks);
     ctx.cfg = tb_compute_rpo(f, ws);
 
     // schedule nodes
@@ -1457,7 +1442,6 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
 
     nl_hashset_free(ctx.declared_vars);
     nl_hashset_free(ctx.declared_types);
-    dyn_array_destroy(ctx.visited_blocks);
 
     nl_table_for(p, &ctx.block_ranges) {
         tb_platform_heap_free(p->v);

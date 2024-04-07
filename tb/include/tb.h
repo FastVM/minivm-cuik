@@ -53,9 +53,6 @@
 #  endif
 #endif
 
-struct TB_CBuffer;
-typedef struct TB_CBuffer TB_CBuffer;
-
 // These are flags
 typedef enum TB_ArithmeticBehavior {
     TB_ARITHMATIC_NONE = 0,
@@ -1499,6 +1496,8 @@ TB_API void tb_print_dumb(TB_Function* f, bool use_fancy_types);
 // Super special experimental stuff (no touchy yet)
 // This code was originally written by Shaw Summa (https://github.com/shawsumma/)
 
+typedef struct TB_CBuffer TB_CBuffer;
+
 /// Call first to create a buffer to print to
 TB_API TB_CBuffer *tb_c_buf_new(void);
 /// Call second to print the prelude needed to compile c
@@ -1511,6 +1510,21 @@ TB_API void tb_c_print_function(TB_CBuffer *buf, TB_Function* f, TB_Worklist* ws
 TB_API const char *tb_c_buf_to_data(TB_CBuffer *buf);
 /// Call to cleanup (free) the `const char *` from `tb_c_buf_to_data`
 TB_API void tb_c_data_free(const char *data);
+
+////////////////////////
+// TB to GCC Compiler //
+////////////////////////
+
+typedef struct TB_GCCJIT_Module TB_GCCJIT_Module;
+typedef struct TB_GCCJIT_Function TB_GCCJIT_Function;
+
+TB_API TB_GCCJIT_Module *tb_gcc_module_new(TB_Module *mod);
+TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp);
+TB_API void *tb_gcc_function_ptr(TB_GCCJIT_Function *func);
+
+/////////////////////
+// Code Generation //
+/////////////////////
 
 // codegen:
 //   output goes at the top of the code_arena, feel free to place multiple functions
