@@ -1411,6 +1411,8 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     }
     tb_free_cfg(&ctx.cfg);
 
+    worklist_clear(ws);
+
     f->worklist = NULL;
     f->scheduled = NULL;
 

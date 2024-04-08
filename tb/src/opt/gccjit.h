@@ -809,9 +809,8 @@ TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Func
             name
         );
     }
-    char *fname = tb_platform_heap_alloc(sizeof(char) * 24);
-    snprintf(fname, 23, "func_%zu", ++ mod->nfuncs);
 
+    const char *fname = f->super.name;
     ctx.gcc_func = gcc_jit_context_new_function(mod->ctx, NULL, GCC_JIT_FUNCTION_EXPORTED, ctx.gcc_func_return, fname, num_params, params, false);
 
     FOR_N(i, 0, num_params) {
