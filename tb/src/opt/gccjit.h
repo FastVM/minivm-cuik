@@ -1,5 +1,7 @@
 
+#if !defined(LIBGCCJIT_H)
 #include <libgccjit.h>
+#endif
 
 struct TB_GCCJIT_Module {
     TB_Module *tb;
@@ -28,7 +30,7 @@ typedef struct TB_GCCJIT_Context {
 static gcc_jit_rvalue *tb_gcc_get(NL_Table *table, TB_Node *key) {
     gcc_jit_rvalue *ret = nl_table_get(table, (void *) (size_t) key->gvn);
     if (ret == NULL) {
-        fprintf(stderr, "gvn not found: %zu\n", key->gvn);
+        fprintf(stderr, "gvn not found: %u\n", key->gvn);
         tb_todo();
     }
     return ret;

@@ -39,7 +39,7 @@ static const char *c_fmt_type_name(TB_DataType dt) {
     switch (dt.type) {
         case TB_INT: {
             if (dt.data == 0) return  "void";
-            if (dt.data == 1) return  "char";
+            if (dt.data == 1) return  "bool";
             if (dt.data <= 8) return  "uint8_t";
             if (dt.data <= 16) return  "uint16_t";
             if (dt.data <= 32) return  "uint32_t";
@@ -84,11 +84,11 @@ static const char *c_fmt_type_name_signed(TB_DataType dt) {
 }
 
 static void c_fmt_output(CFmtState* ctx, TB_Node* n) {
+    c_fmt_spaces(ctx);
     if (n->users != NULL) {
         if (!nl_hashset_put(&ctx->declared_vars, n)) {
             nl_buffer_format(ctx->pre, "  %s v%u;\n", c_fmt_type_name(n->dt), n->gvn);
         }
-        c_fmt_spaces(ctx);
         nl_buffer_format(ctx->buf, "v%u = ", n->gvn);
     }
 }
@@ -257,9 +257,9 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
         TB_Symbol* sym = TB_NODE_GET_EXTRA_T(n, TB_NodeSymbol)->sym;
         if (sym->name[0]) {
             if (sym->tag == TB_SYMBOL_GLOBAL) {
-                nl_buffer_format(ctx->buf, "tb2c_sym%zu_%s", sym->symbol_id, sym->name);
+                nl_buffer_format(ctx->buf, "(void*)tb2c_sym%zu_%s", sym->symbol_id, sym->name);
             } else {
-                nl_buffer_format(ctx->buf, "%s", sym->name);
+                nl_buffer_format(ctx->buf, "(void*)%s", sym->name);
             }
         } else if (ctx->module->is_jit) {
             nl_buffer_format(ctx->buf, "(void*)%p", sym->address);
@@ -436,7 +436,20 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
 
 static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
     size_t declared_vars_length = dyn_array_length(&ctx->declared_vars);
+#if 1
+    if (bb_start->type == TB_REGION) {
+        const char *tag = TB_NODE_GET_EXTRA_T(bb_start, TB_NodeRegion)->tag;
+        if (tag) {
+            nl_buffer_format(ctx->buf, "bb%u:printf(\"%s\\n\");\n", bb_start->gvn, tag);
+        } else {
+            nl_buffer_format(ctx->buf, "bb%u:;\n", bb_start->gvn);
+        }
+    } else {
+        nl_buffer_format(ctx->buf, "bb%u:printf(\"$entry\\n\");\n", bb_start->gvn);
+    }
+#else
     nl_buffer_format(ctx->buf, "bb%u:;\n", bb_start->gvn);
+#endif
 
     TB_BasicBlock* bb = ctx->f->scheduled[bb_start->gvn];
     CFmtBlockRange *range = c_fmt_get_block_range(ctx, ws, bb_start);
@@ -749,12 +762,14 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
 
             case TB_BITCAST: {
                 TB_Node *src = n->inputs[n->input_count-1];
-                if (TB_IS_FLOAT_TYPE(src->dt) && TB_IS_FLOAT_TYPE(n->dt)) {
+                if (src->dt.raw != n->dt.raw) {
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "{\n");
                     ctx->depth += 1;
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "union {%s src; %s dest;} tmp;\n", c_fmt_type_name(src->dt), c_fmt_type_name(n->dt));
+                    c_fmt_spaces(ctx);
+                    nl_buffer_format(ctx->buf, "memset(&tmp, 0, sizeof(tmp));\n");
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tmp.src = ");
                     c_fmt_ref_to_node(ctx, src);
@@ -766,7 +781,6 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     nl_buffer_format(ctx->buf, "}\n");
                 } else {
                     c_fmt_output(ctx, n);
-                    nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(n->dt));
                     c_fmt_ref_to_node(ctx, src);
                     nl_buffer_format(ctx->buf, ";\n");
                 }
@@ -1284,8 +1298,10 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
     if (sizeof(size_t) == sizeof(uint32_t)) {
         nl_buffer_format(buf, "typedef uint32_t size_t;\n");
     }
+    nl_buffer_format(buf, "typedef _Bool bool;\n");
     nl_buffer_format(buf, "void *memcpy(void *dest, const void *src, size_t n);\n");
     nl_buffer_format(buf, "void *memset(void *str, int c, size_t n);\n");
+    nl_buffer_format(buf, "int printf(const char *str, ...);\n");
     nl_buffer_format(buf, "\n");
     NL_HashSet* syms = &tb_thread_info(mod)->symbols;
     nl_hashset_for(sym_vp, syms) {
