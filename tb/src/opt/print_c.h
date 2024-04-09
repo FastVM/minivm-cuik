@@ -436,7 +436,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
 
 static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
     size_t declared_vars_length = dyn_array_length(&ctx->declared_vars);
-#if 1
+#if 0
     if (bb_start->type == TB_REGION) {
         const char *tag = TB_NODE_GET_EXTRA_T(bb_start, TB_NodeRegion)->tag;
         if (tag) {
@@ -768,8 +768,8 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     ctx->depth += 1;
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "union {%s src; %s dest;} tmp;\n", c_fmt_type_name(src->dt), c_fmt_type_name(n->dt));
-                    c_fmt_spaces(ctx);
-                    nl_buffer_format(ctx->buf, "memset(&tmp, 0, sizeof(tmp));\n");
+                    // c_fmt_spaces(ctx);
+                    // nl_buffer_format(ctx->buf, "memset(&tmp, 0, sizeof(tmp));\n");
                     c_fmt_spaces(ctx);
                     nl_buffer_format(ctx->buf, "tmp.src = ");
                     c_fmt_ref_to_node(ctx, src);
