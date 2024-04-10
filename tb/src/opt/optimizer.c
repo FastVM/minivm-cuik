@@ -247,7 +247,9 @@ static void mark_users(TB_Function* f, TB_Node* n) {
 #include "scheduler.h"
 #include "list_sched.h"
 #include "legalizer.h"
+#if !defined(EMSCRIPTEN)
 #include "gccjit.h"
+#endif
 
 void tb__gvn_remove(TB_Function* f, TB_Node* n) {
     nl_hashset_remove2(&f->gvn_nodes, n, gvn_hash, gvn_compare);
