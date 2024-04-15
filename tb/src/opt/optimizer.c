@@ -247,7 +247,7 @@ static void mark_users(TB_Function* f, TB_Node* n) {
 #include "scheduler.h"
 #include "list_sched.h"
 #include "legalizer.h"
-#if !defined(EMSCRIPTEN)
+#if defined(TB_USE_GCCJIT)
 #include "gccjit.h"
 #endif
 

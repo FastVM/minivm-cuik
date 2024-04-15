@@ -1515,12 +1515,14 @@ TB_API void tb_c_data_free(const char *data);
 // TB to GCC Compiler //
 ////////////////////////
 
+#if defined(TB_USE_GCCJIT)
 typedef struct TB_GCCJIT_Module TB_GCCJIT_Module;
 typedef struct TB_GCCJIT_Function TB_GCCJIT_Function;
 
 TB_API TB_GCCJIT_Module *tb_gcc_module_new(TB_Module *mod);
 TB_API TB_GCCJIT_Function *tb_gcc_module_function(TB_GCCJIT_Module *mod, TB_Function* f, TB_Worklist* ws, TB_Arena* tmp);
 TB_API void *tb_gcc_function_ptr(TB_GCCJIT_Function *func);
+#endif
 
 /////////////////////
 // Code Generation //
