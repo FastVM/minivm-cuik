@@ -104,6 +104,15 @@ struct Lattice {
 };
 
 ////////////////////////////////
+// Cool properties
+////////////////////////////////
+bool cfg_is_region(TB_Node* n);
+bool cfg_is_natural_loop(TB_Node* n);
+bool cfg_is_fork(TB_Node* n);
+bool cfg_is_terminator(TB_Node* n);
+bool cfg_is_endpoint(TB_Node* n);
+
+////////////////////////////////
 // CFG
 ////////////////////////////////
 typedef struct {
@@ -131,22 +140,18 @@ static uint64_t tb__mask(uint64_t bits) {
     return ~UINT64_C(0) >> (64 - bits);
 }
 
-static bool cfg_is_fork(TB_Node* n) {
-    return n->type == TB_BRANCH;
-}
-
 static bool cfg_is_cproj(TB_Node* n) {
-    return is_proj(n) && n->dt.type == TB_CONTROL;
+    return is_proj(n) && n->dt.type == TB_TAG_CONTROL;
 }
 
 static bool cfg_is_mproj(TB_Node* n) {
-    return n->type == TB_PROJ && n->dt.type == TB_MEMORY;
+    return n->type == TB_PROJ && n->dt.type == TB_TAG_MEMORY;
 }
 
 // includes tuples which have control flow
 static bool cfg_is_control(TB_Node* n) {
-    if (n->dt.type == TB_CONTROL) { return true; }
-    if (n->dt.type == TB_TUPLE) {
+    if (n->dt.type == TB_TAG_CONTROL) { return true; }
+    if (n->dt.type == TB_TAG_TUPLE) {
         FOR_USERS(u, n) {
             if (cfg_is_cproj(USERN(u))) { return true; }
         }
@@ -157,7 +162,7 @@ static bool cfg_is_control(TB_Node* n) {
 static bool cfg_is_bb_entry(TB_Node* n) {
     if (n->type == TB_REGION) {
         return true;
-    } else if (cfg_is_cproj(n) && (n->inputs[0]->type == TB_ROOT || n->inputs[0]->type == TB_BRANCH)) {
+    } else if (cfg_is_cproj(n) && (n->inputs[0]->type == TB_ROOT || cfg_is_fork(n->inputs[0]))) {
         // Start's control proj or a branch target
         return true;
     } else {
@@ -167,7 +172,7 @@ static bool cfg_is_bb_entry(TB_Node* n) {
 
 // returns a BranchProj's falsey proj, if it's an if-like TB_BRANCH
 static TB_NodeBranchProj* cfg_if_branch(TB_Node* n) {
-    assert(n->type == TB_BRANCH);
+    assert(n->type == TB_BRANCH || n->type == TB_AFFINE_LATCH);
     TB_NodeBranch* br = TB_NODE_GET_EXTRA(n);
     if (br->succ_count != 2) { return NULL; }
 
@@ -183,7 +188,7 @@ static TB_NodeBranchProj* cfg_if_branch(TB_Node* n) {
 }
 
 static bool is_mem_out_op(TB_Node* n) {
-    return n->dt.type == TB_MEMORY || (n->type >= TB_STORE && n->type <= TB_ATOMIC_CAS) || (n->type >= TB_CALL && n->type <= TB_TAILCALL) || n->type == TB_SPLITMEM || n->type == TB_MERGEMEM;
+    return n->dt.type == TB_TAG_MEMORY || (n->type >= TB_STORE && n->type <= TB_ATOMIC_CAS) || (n->type >= TB_CALL && n->type <= TB_TAILCALL) || n->type == TB_SPLITMEM || n->type == TB_MERGEMEM;
 }
 
 static bool is_pinned(TB_Node* n) {
@@ -212,20 +217,19 @@ static bool single_use(TB_Node* n) {
 // if we see a branch projection, it may either be a BB itself
 // or if it enters a REGION directly, then that region is the BB.
 static TB_Node* cfg_next_bb_after_cproj(TB_Node* proj) {
-    assert(proj->type == TB_BRANCH_PROJ && proj->inputs[0]->type == TB_BRANCH);
+    assert(cfg_is_cproj(proj) && cfg_is_fork(proj->inputs[0]));
     TB_Node* n = proj->inputs[0];
 
-    assert(proj->users && "missing successor after cproj");
+    assert(proj->user_count >= 1 && "missing successor after cproj");
     TB_Node* r = USERN(proj->users);
     if (!single_use(proj) || r->type != TB_REGION) {
         // multi-user proj, this means it's basically a BB
         return proj;
     }
 
-    assert(n->type == TB_BRANCH);
     if (r->type == TB_REGION) {
         FOR_USERS(u, r) {
-            if (USERN(u)->type == TB_PHI && USERN(u)->dt.type != TB_MEMORY) {
+            if (USERN(u)->type == TB_PHI && USERN(u)->dt.type != TB_TAG_MEMORY) {
                 return proj;
             }
         }
@@ -235,7 +239,7 @@ static TB_Node* cfg_next_bb_after_cproj(TB_Node* proj) {
 }
 
 static TB_User* proj_with_index(TB_Node* n, int i) {
-    FOR_USERS(u, n) {
+    FOR_USERS(u, n) if (is_proj(USERN(u))) {
         TB_NodeProj* p = TB_NODE_GET_EXTRA(USERN(u));
         if (p->index == i) { return u; }
     }
@@ -372,10 +376,11 @@ void tb_global_schedule(TB_Function* f, TB_Worklist* ws, TB_CFG cfg, bool datafl
 
 // makes arch-friendly IR
 void tb_opt_legalize(TB_Function* f, TB_Arch arch);
-void tb_opt_peeps(TB_Function* f);
 void tb_opt_build_loop_tree(TB_Function* f);
 void tb_opt_loops(TB_Function* f);
-bool tb_opt_locals(TB_Function* f);
+
+int tb_opt_peeps(TB_Function* f);
+int tb_opt_locals(TB_Function* f);
 
 Lattice* latuni_get(TB_Function* f, TB_Node* n);
 

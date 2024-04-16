@@ -17,7 +17,6 @@
 //   MAF  - monotone analysis framework
 //   SCC  - strongly connected components
 //   MOP  - meet over all paths
-//   NMT  - not-marked through (pauseless paper)
 #ifndef TB_CORE_H
 #define TB_CORE_H
 
@@ -172,24 +171,19 @@ typedef enum TB_MemoryOrder {
 typedef enum TB_DataTypeEnum {
     // Integers, note void is an i0 and bool is an i1
     //   i(0-64)
-    TB_INT,
+    TB_TAG_INT,
     // Floating point numbers
-    TB_FLOAT32,
-    TB_FLOAT64,
+    TB_TAG_F32,
+    TB_TAG_F64,
     // Pointers
-    TB_PTR,
+    TB_TAG_PTR,
     // represents control flow for REGION, BRANCH
-    TB_CONTROL,
+    TB_TAG_CONTROL,
     // represents memory (and I/O)
-    TB_MEMORY,
+    TB_TAG_MEMORY,
     // Tuples, these cannot be used in memory ops, just accessed via projections
-    TB_TUPLE,
+    TB_TAG_TUPLE,
 } TB_DataTypeEnum;
-
-typedef enum TB_FloatFormat {
-    // IEEE 754 floats
-    TB_FLT_32, TB_FLT_64
-} TB_FloatFormat;
 
 typedef union TB_DataType {
     struct {
@@ -202,12 +196,12 @@ typedef union TB_DataType {
 static_assert(sizeof(TB_DataType) == 2, "im expecting this to be a uint16_t");
 
 // classify data types
-#define TB_IS_VOID_TYPE(x)     ((x).type == TB_INT && (x).data == 0)
-#define TB_IS_BOOL_TYPE(x)     ((x).type == TB_INT && (x).data == 1)
-#define TB_IS_INTEGER_TYPE(x)  ((x).type == TB_INT)
-#define TB_IS_FLOAT_TYPE(x)    ((x).type == TB_FLOAT32 || (x).type == TB_FLOAT64)
-#define TB_IS_POINTER_TYPE(x)  ((x).type == TB_PTR)
-#define TB_IS_SCALAR_TYPE(x)   ((x).type <= TB_PTR)
+#define TB_IS_VOID_TYPE(x)     ((x).type == TB_TAG_INT && (x).data == 0)
+#define TB_IS_BOOL_TYPE(x)     ((x).type == TB_TAG_INT && (x).data == 1)
+#define TB_IS_INTEGER_TYPE(x)  ((x).type == TB_TAG_INT)
+#define TB_IS_FLOAT_TYPE(x)    ((x).type == TB_TAG_F32 || (x).type == TB_TAG_F64)
+#define TB_IS_POINTER_TYPE(x)  ((x).type == TB_TAG_PTR)
+#define TB_IS_SCALAR_TYPE(x)   ((x).type <= TB_TAG_PTR)
 
 // accessors
 #define TB_GET_INT_BITWIDTH(x) ((x).data)
@@ -235,9 +229,9 @@ typedef enum TB_NodeTypeEnum {
     ////////////////////////////////
     // CONSTANTS
     ////////////////////////////////
-    TB_INTEGER_CONST,
-    TB_FLOAT32_CONST,
-    TB_FLOAT64_CONST,
+    TB_ICONST,
+    TB_F32CONST,
+    TB_F64CONST,
 
     ////////////////////////////////
     // PROJECTIONS
@@ -281,7 +275,7 @@ typedef enum TB_NodeTypeEnum {
     //   a natural loop header has the first edge be the dominating predecessor, every other edge
     //   is a backedge.
     TB_NATURAL_LOOP, // (Control...) -> (Control)
-    //   a natural loop header (thus also a region) where the induction var is an affine function
+    //   a natural loop header (thus also a region) with an affine induction var (and thus affine loop bounds)
     TB_AFFINE_LOOP,  // (Control...) -> (Control)
     //   phi nodes work the same as in SSA CFG, the value is based on which predecessor was taken.
     //   each input lines up with the regions such that region.in[i] will use phi.in[i+1] as the
@@ -297,6 +291,13 @@ typedef enum TB_NodeTypeEnum {
     //   it's possible to not pass a key and the default successor is always called, this is
     //   a GOTO. tb_inst_goto, tb_inst_if can handle common cases for you.
     TB_BRANCH,      // (Control, Data) -> (Control...)
+    //   just a branch but tagged as the latch to some affine loop.
+    TB_AFFINE_LATCH,// (Control, Data) -> (Control...)
+    //   this is a fake branch which acts as a backedge for infinite loops, this keeps the
+    //   graph from getting disconnected with the endpoint.
+    //
+    //   CProj0 is the taken path, CProj1 is exits the loop.
+    TB_NEVER_BRANCH,// (Control) -> (Control...)
     //   debugbreak will trap in a continuable manner.
     TB_DEBUGBREAK,  // (Control, Memory) -> (Control)
     //   trap will not be continuable but will stop execution.
@@ -374,12 +375,13 @@ typedef enum TB_NodeTypeEnum {
 
     // Conversions
     TB_TRUNCATE,
+    TB_FLOAT_TRUNC,
     TB_FLOAT_EXT,
     TB_SIGN_EXT,
     TB_ZERO_EXT,
     TB_UINT2FLOAT,
     TB_FLOAT2UINT,
-    TB_INT2FLOAT,
+    TB_TAG_INT2FLOAT,
     TB_FLOAT2INT,
     TB_BITCAST,
 
@@ -624,13 +626,17 @@ typedef struct { // TB_MACH_PROJ
     RegMask* def;
 } TB_NodeMachProj;
 
+typedef struct { // TB_MACH_SYMBOL
+    TB_Symbol* sym;
+} TB_NodeMachSymbol;
+
 typedef struct { // TB_BRANCH_PROJ
     int index;
     uint64_t taken;
     int64_t key;
 } TB_NodeBranchProj;
 
-typedef struct { // TB_INTEGER_CONST
+typedef struct { // TB_ICONST
     uint64_t value;
 } TB_NodeInt;
 
@@ -782,37 +788,37 @@ typedef struct {
 // *******************************
 #ifdef __cplusplus
 
-#define TB_TYPE_TUPLE   TB_DataType{ { TB_TUPLE      } }
-#define TB_TYPE_CONTROL TB_DataType{ { TB_CONTROL    } }
-#define TB_TYPE_VOID    TB_DataType{ { TB_INT,    0  } }
-#define TB_TYPE_I8      TB_DataType{ { TB_INT,    8  } }
-#define TB_TYPE_I16     TB_DataType{ { TB_INT,    16 } }
-#define TB_TYPE_I32     TB_DataType{ { TB_INT,    32 } }
-#define TB_TYPE_I64     TB_DataType{ { TB_INT,    64 } }
-#define TB_TYPE_F32     TB_DataType{ { TB_FLOAT32    } }
-#define TB_TYPE_F64     TB_DataType{ { TB_FLOAT64    } }
-#define TB_TYPE_BOOL    TB_DataType{ { TB_INT,    1  } }
-#define TB_TYPE_PTR     TB_DataType{ { TB_PTR,    0  } }
-#define TB_TYPE_MEMORY  TB_DataType{ { TB_MEMORY, 0  } }
-#define TB_TYPE_INTN(N) TB_DataType{ { TB_INT,   (N) } }
-#define TB_TYPE_PTRN(N) TB_DataType{ { TB_PTR,   (N) } }
+#define TB_TYPE_TUPLE   TB_DataType{ { TB_TAG_TUPLE      } }
+#define TB_TYPE_CONTROL TB_DataType{ { TB_TAG_CONTROL    } }
+#define TB_TYPE_VOID    TB_DataType{ { TB_TAG_INT,    0  } }
+#define TB_TYPE_I8      TB_DataType{ { TB_TAG_INT,    8  } }
+#define TB_TYPE_I16     TB_DataType{ { TB_TAG_INT,    16 } }
+#define TB_TYPE_I32     TB_DataType{ { TB_TAG_INT,    32 } }
+#define TB_TYPE_I64     TB_DataType{ { TB_TAG_INT,    64 } }
+#define TB_TYPE_F32     TB_DataType{ { TB_TAG_F32    } }
+#define TB_TYPE_F64     TB_DataType{ { TB_TAG_F64    } }
+#define TB_TYPE_BOOL    TB_DataType{ { TB_TAG_INT,    1  } }
+#define TB_TYPE_PTR     TB_DataType{ { TB_TAG_PTR,    0  } }
+#define TB_TYPE_MEMORY  TB_DataType{ { TB_TAG_MEMORY, 0  } }
+#define TB_TYPE_INTN(N) TB_DataType{ { TB_TAG_INT,   (N) } }
+#define TB_TYPE_PTRN(N) TB_DataType{ { TB_TAG_PTR,   (N) } }
 
 #else
 
-#define TB_TYPE_TUPLE   (TB_DataType){ { TB_TUPLE      } }
-#define TB_TYPE_CONTROL (TB_DataType){ { TB_CONTROL    } }
-#define TB_TYPE_VOID    (TB_DataType){ { TB_INT,    0  } }
-#define TB_TYPE_I8      (TB_DataType){ { TB_INT,    8  } }
-#define TB_TYPE_I16     (TB_DataType){ { TB_INT,    16 } }
-#define TB_TYPE_I32     (TB_DataType){ { TB_INT,    32 } }
-#define TB_TYPE_I64     (TB_DataType){ { TB_INT,    64 } }
-#define TB_TYPE_F32     (TB_DataType){ { TB_FLOAT32    } }
-#define TB_TYPE_F64     (TB_DataType){ { TB_FLOAT64    } }
-#define TB_TYPE_BOOL    (TB_DataType){ { TB_INT,    1  } }
-#define TB_TYPE_PTR     (TB_DataType){ { TB_PTR,    0  } }
-#define TB_TYPE_MEMORY  (TB_DataType){ { TB_MEMORY, 0  } }
-#define TB_TYPE_INTN(N) (TB_DataType){ { TB_INT,   (N) } }
-#define TB_TYPE_PTRN(N) (TB_DataType){ { TB_PTR,   (N) } }
+#define TB_TYPE_TUPLE   (TB_DataType){ { TB_TAG_TUPLE      } }
+#define TB_TYPE_CONTROL (TB_DataType){ { TB_TAG_CONTROL    } }
+#define TB_TYPE_VOID    (TB_DataType){ { TB_TAG_INT,    0  } }
+#define TB_TYPE_I8      (TB_DataType){ { TB_TAG_INT,    8  } }
+#define TB_TYPE_I16     (TB_DataType){ { TB_TAG_INT,    16 } }
+#define TB_TYPE_I32     (TB_DataType){ { TB_TAG_INT,    32 } }
+#define TB_TYPE_I64     (TB_DataType){ { TB_TAG_INT,    64 } }
+#define TB_TYPE_F32     (TB_DataType){ { TB_TAG_F32    } }
+#define TB_TYPE_F64     (TB_DataType){ { TB_TAG_F64    } }
+#define TB_TYPE_BOOL    (TB_DataType){ { TB_TAG_INT,    1  } }
+#define TB_TYPE_PTR     (TB_DataType){ { TB_TAG_PTR,    0  } }
+#define TB_TYPE_MEMORY  (TB_DataType){ { TB_TAG_MEMORY, 0  } }
+#define TB_TYPE_INTN(N) (TB_DataType){ { TB_TAG_INT,   (N) } }
+#define TB_TYPE_PTRN(N) (TB_DataType){ { TB_TAG_PTR,   (N) } }
 
 #endif
 
@@ -1339,12 +1345,13 @@ TB_API TB_Node* tb_inst_incomplete_phi(TB_Function* f, TB_DataType dt, TB_Node* 
 TB_API bool tb_inst_add_phi_operand(TB_Function* f, TB_Node* phi, TB_Node* region, TB_Node* val);
 
 TB_API TB_Node* tb_inst_phi2(TB_Function* f, TB_Node* region, TB_Node* a, TB_Node* b);
-TB_API void tb_inst_goto(TB_Function* f, TB_Node* target);
 TB_API TB_Node* tb_inst_if(TB_Function* f, TB_Node* cond, TB_Node* true_case, TB_Node* false_case);
 TB_API TB_Node* tb_inst_branch(TB_Function* f, TB_DataType dt, TB_Node* key, TB_Node* default_case, size_t entry_count, const TB_SwitchEntry* keys);
 TB_API void tb_inst_unreachable(TB_Function* f);
 TB_API void tb_inst_debugbreak(TB_Function* f);
 TB_API void tb_inst_trap(TB_Function* f);
+TB_API void tb_inst_goto(TB_Function* f, TB_Node* target);
+TB_API void tb_inst_never_branch(TB_Function* f, TB_Node* if_true, TB_Node* if_false);
 
 TB_API const char* tb_node_get_name(TB_Node* n);
 

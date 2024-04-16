@@ -37,7 +37,7 @@ static void c_fmt_spaces(CFmtState *ctx) {
 
 static const char *c_fmt_type_name(TB_DataType dt) {
     switch (dt.type) {
-        case TB_INT: {
+        case TB_TAG_INT: {
             if (dt.data == 0) return  "void";
             if (dt.data == 1) return  "bool";
             if (dt.data <= 8) return  "uint8_t";
@@ -47,13 +47,13 @@ static const char *c_fmt_type_name(TB_DataType dt) {
             tb_todo();
             break;
         }
-        case TB_PTR: {
+        case TB_TAG_PTR: {
             if (dt.data == 0) return  "void*";
             else tb_todo();
             break;
         }
-        case TB_FLOAT32: return "float";
-        case TB_FLOAT64: return "double";
+        case TB_TAG_F32: return "float";
+        case TB_TAG_F64: return "double";
         default: tb_todo();
     }
     return NULL;
@@ -61,7 +61,7 @@ static const char *c_fmt_type_name(TB_DataType dt) {
 
 static const char *c_fmt_type_name_signed(TB_DataType dt) {
     switch (dt.type) {
-        case TB_INT: {
+        case TB_TAG_INT: {
             if (dt.data == 0) return  "void";
             if (dt.data == 1) return  "char";
             if (dt.data <= 8) return  "int8_t";
@@ -71,13 +71,13 @@ static const char *c_fmt_type_name_signed(TB_DataType dt) {
             else __builtin_trap();
             break;
         }
-        case TB_PTR: {
+        case TB_TAG_PTR: {
             if (dt.data == 0) return  "void*";
             else tb_todo();
             break;
         }
-        case TB_FLOAT32: return "float";
-        case TB_FLOAT64: return "double";
+        case TB_TAG_F32: return "float";
+        case TB_TAG_F64: return "double";
         default: tb_todo();
     }
     return NULL;
@@ -95,14 +95,14 @@ static void c_fmt_output(CFmtState* ctx, TB_Node* n) {
 
 static bool c_fmt_will_inline(TB_Node *n) {
     switch (n->type) {
-        case TB_ROOT: case TB_INTEGER_CONST:
+        case TB_ROOT: case TB_ICONST:
         case TB_REGION: case TB_NATURAL_LOOP: case TB_AFFINE_LOOP:
-        case TB_FLOAT32_CONST: case TB_FLOAT64_CONST:
+        case TB_F32CONST: case TB_F64CONST:
         case TB_SYMBOL: case TB_ZERO_EXT: case TB_SIGN_EXT:
         case TB_BRANCH_PROJ: 
         return true;
 
-        case TB_PROJ: if (n->dt.type == TB_CONTROL) { return true; }
+        case TB_PROJ: if (n->dt.type == TB_TAG_CONTROL) { return true; }
         break;
     }
 
@@ -247,10 +247,10 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
         nl_buffer_format(ctx->buf, "(%s) ", c_fmt_type_name(lhs->dt));
         c_fmt_ref_to_node(ctx, rhs);
         nl_buffer_format(ctx->buf, ")");
-    } else if (n->type == TB_FLOAT32_CONST) {
+    } else if (n->type == TB_F32CONST) {
         TB_NodeFloat32* f = TB_NODE_GET_EXTRA(n);
         nl_buffer_format(ctx->buf, "%f", f->value);
-    } else if (n->type == TB_FLOAT64_CONST) {
+    } else if (n->type == TB_F64CONST) {
         TB_NodeFloat64* f = TB_NODE_GET_EXTRA(n);
         nl_buffer_format(ctx->buf, "%f", f->value);
     } else if (n->type == TB_SYMBOL) {
@@ -315,7 +315,7 @@ static void c_fmt_inline_node(CFmtState* ctx, TB_Node *n) {
         c_fmt_ref_to_node(ctx, n->inputs[1]);
     } else if (n->type == TB_SIGN_EXT) {
         c_fmt_ref_to_node(ctx, n->inputs[1]);
-    } else if (n->type == TB_INTEGER_CONST) {
+    } else if (n->type == TB_ICONST) {
         TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
 
         nl_buffer_format(ctx->buf, "(%s)", c_fmt_type_name(n->dt));
@@ -382,7 +382,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
         FOR_USERS(u, target) {
             if (USERN(u)->type == TB_PHI) {
                 if (USERN(u)->inputs[phi_i] != NULL) {
-                    if (USERN(u)->inputs[phi_i]->dt.type != TB_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_MEMORY) {
+                    if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
                         has_phi += 1;
                     }
                 }
@@ -393,7 +393,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
         FOR_USERS(u, target) {
             if (USERN(u)->type == TB_PHI) {
                 if (USERN(u)->inputs[phi_i] != NULL) {
-                    if (USERN(u)->inputs[phi_i]->dt.type != TB_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_MEMORY) {
+                    if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
                         assert(phi_i >= 0);
                         if (pos != 0) {
                             c_fmt_spaces(ctx);
@@ -410,7 +410,7 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
         FOR_USERS(u, target) {
             if (USERN(u)->type == TB_PHI) {
                 if (USERN(u)->inputs[phi_i] != NULL) {
-                    if (USERN(u)->inputs[phi_i]->dt.type != TB_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_MEMORY) {
+                    if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
                         assert(phi_i >= 0);
                         if (pos == 0) {
                             c_fmt_output(ctx, USERN(u));
@@ -601,7 +601,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     }
                     bool first = true;
                     FOR_N(i, 3, n->input_count) {
-                        if (n->inputs[i]->dt.type != TB_CONTROL && n->inputs[i]->dt.type != TB_MEMORY) {
+                        if (n->inputs[i]->dt.type != TB_TAG_CONTROL && n->inputs[i]->dt.type != TB_TAG_MEMORY) {
                             if (!first) {
                                 nl_buffer_format(ctx->globals, ", ");
                             }
@@ -626,7 +626,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     {
                         bool first = true;
                         FOR_N(i, 3, n->input_count) {
-                            if (n->inputs[i]->dt.type != TB_CONTROL && n->inputs[i]->dt.type != TB_MEMORY) {
+                            if (n->inputs[i]->dt.type != TB_TAG_CONTROL && n->inputs[i]->dt.type != TB_TAG_MEMORY) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
@@ -649,7 +649,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     {
                         bool first = true;
                         FOR_N(i, 3, n->input_count) {
-                            if (n->inputs[i]->dt.type != TB_CONTROL && n->inputs[i]->dt.type != TB_MEMORY) {
+                            if (n->inputs[i]->dt.type != TB_TAG_CONTROL && n->inputs[i]->dt.type != TB_TAG_MEMORY) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
@@ -1094,7 +1094,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
             case TB_FLOAT2UINT:
             case TB_FLOAT2INT:
             case TB_UINT2FLOAT:
-            case TB_INT2FLOAT:
+            case TB_TAG_INT2FLOAT:
             case TB_TRUNCATE: {
                 TB_Node *input = n->inputs[n->input_count-1];
                 c_fmt_output(ctx, n);
@@ -1145,7 +1145,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 {
                     bool first = true;
                     FOR_N(i, 3, n->input_count) {
-                        if (n->inputs[i]->dt.type != TB_CONTROL && n->inputs[i]->dt.type != TB_MEMORY) {
+                        if (n->inputs[i]->dt.type != TB_TAG_CONTROL && n->inputs[i]->dt.type != TB_TAG_MEMORY) {
                             if (!first) {
                                 nl_buffer_format(ctx->globals, ", ");
                             }
@@ -1171,7 +1171,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     {
                         bool first = true;
                         FOR_N(i, 3, n->input_count) {
-                            if (n->inputs[i]->dt.type != TB_CONTROL && n->inputs[i]->dt.type != TB_MEMORY) {
+                            if (n->inputs[i]->dt.type != TB_TAG_CONTROL && n->inputs[i]->dt.type != TB_TAG_MEMORY) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
@@ -1193,7 +1193,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     {
                         bool first = true;
                         FOR_N(i, 3, n->input_count) {
-                            if (n->inputs[i]->dt.type != TB_CONTROL && n->inputs[i]->dt.type != TB_MEMORY) {
+                            if (n->inputs[i]->dt.type != TB_TAG_CONTROL && n->inputs[i]->dt.type != TB_TAG_MEMORY) {
                                 if (!first) {
                                     nl_buffer_format(ctx->buf, ", ");
                                 }
@@ -1353,7 +1353,7 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
                 if (p->return_count == 0) {
                     nl_buffer_format(buf, "typedef void tb2c_%s_ret_t;\n", sym->name);
                 } else if (p->return_count == 1) {
-                    if (p->params[p->param_count].dt.type == TB_INT && p->params[p->param_count].dt.data == 32 && !strcmp(sym->name, "main")) {
+                    if (p->params[p->param_count].dt.type == TB_TAG_INT && p->params[p->param_count].dt.data == 32 && !strcmp(sym->name, "main")) {
                         nl_buffer_format(buf, "#define tb2c_%s_ret_t int\n", sym->name);
                         nl_buffer_format(buf, "#define main(...) main(int v4, char **v5)\n");
                     } else {
@@ -1376,7 +1376,7 @@ TB_API void tb_c_print_prelude(TB_CBuffer *c_buf, TB_Module *mod) {
                 TB_Node** params = f->params;
                 size_t count = 0;
                 FOR_N(i, 3, 3 + f->param_count) {
-                    if (params[i] != NULL && params[i]->dt.type != TB_MEMORY && params[i]->dt.type != TB_CONTROL && params[i]->dt.type != TB_TUPLE) {
+                    if (params[i] != NULL && params[i]->dt.type != TB_TAG_MEMORY && params[i]->dt.type != TB_TAG_CONTROL && params[i]->dt.type != TB_TAG_TUPLE) {
                         if (count != 0) {
                             nl_buffer_format(buf, ", ");
                         }
@@ -1439,7 +1439,7 @@ TB_API void tb_c_print_function(TB_CBuffer *c_buf, TB_Function* f, TB_Worklist* 
     TB_Node** params = f->params;
     size_t count = 0;
     FOR_N(i, 3, 3 + f->param_count) {
-        if (params[i] != NULL && params[i]->dt.type != TB_MEMORY && params[i]->dt.type != TB_CONTROL && params[i]->dt.type != TB_TUPLE) {
+        if (params[i] != NULL && params[i]->dt.type != TB_TAG_MEMORY && params[i]->dt.type != TB_TAG_CONTROL && params[i]->dt.type != TB_TAG_TUPLE) {
             if (count != 0) {
                 nl_buffer_format(buf, ", ");
             }

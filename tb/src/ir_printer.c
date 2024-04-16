@@ -30,9 +30,9 @@ const char* tb_node_get_name(TB_Node* n) {
 
         case TB_POISON: return "poison";
         case TB_DEAD: return "dead";
-        case TB_INTEGER_CONST: return "int";
-        case TB_FLOAT32_CONST: return "float32";
-        case TB_FLOAT64_CONST: return "float64";
+        case TB_ICONST: return "int";
+        case TB_F32CONST: return "float32";
+        case TB_F64CONST: return "float64";
 
         case TB_PHI: return "phi";
         case TB_SELECT: return "select";
@@ -51,11 +51,12 @@ const char* tb_node_get_name(TB_Node* n) {
 
         case TB_ZERO_EXT: return "zxt";
         case TB_SIGN_EXT: return "sxt";
+        case TB_FLOAT_TRUNC: return "fptrunc";
         case TB_FLOAT_EXT: return "fpxt";
         case TB_TRUNCATE: return "trunc";
         case TB_BITCAST: return "bitcast";
         case TB_UINT2FLOAT: return "uint2float";
-        case TB_INT2FLOAT: return "int2float";
+        case TB_TAG_INT2FLOAT: return "int2float";
         case TB_FLOAT2UINT: return "float2uint";
         case TB_FLOAT2INT: return "float2int";
         case TB_SYMBOL: return "symbol";
@@ -114,11 +115,14 @@ const char* tb_node_get_name(TB_Node* n) {
         case TB_CALL:     return "call";
         case TB_SYSCALL:  return "syscall";
         case TB_BRANCH:   return "branch";
+        case TB_AFFINE_LATCH: return "affine_latch";
+        case TB_NEVER_BRANCH: return "never_branch";
         case TB_TAILCALL: return "tailcall";
 
         case TB_MACH_MOVE:  return "mach_move";
         case TB_MACH_COPY:  return "mach_copy";
         case TB_MACH_PROJ:  return "mach_proj";
+        case TB_MACH_SYMBOL:return "mach_symbol";
         case TB_MACH_FRAME_PTR: return "mach_frameptr";
 
         default: {
@@ -132,33 +136,33 @@ const char* tb_node_get_name(TB_Node* n) {
 #define P(...) callback(user_data, __VA_ARGS__)
 static void tb_print_type(TB_DataType dt, TB_PrintCallback callback, void* user_data) {
     switch (dt.type) {
-        case TB_INT: {
+        case TB_TAG_INT: {
             if (dt.data == 0) P("void");
             else P("i%d", dt.data);
             break;
         }
-        case TB_PTR: {
+        case TB_TAG_PTR: {
             if (dt.data == 0) P("ptr");
             else P("ptr%d", dt.data);
             break;
         }
-        case TB_FLOAT32: {
+        case TB_TAG_F32: {
             P("f32");
             break;
         }
-        case TB_FLOAT64: {
+        case TB_TAG_F64: {
             P("f64");
             break;
         }
-        case TB_TUPLE: {
+        case TB_TAG_TUPLE: {
             P("tuple");
             break;
         }
-        case TB_MEMORY: {
+        case TB_TAG_MEMORY: {
             P("memory");
             break;
         }
-        case TB_CONTROL: {
+        case TB_TAG_CONTROL: {
             P("control");
             break;
         }
@@ -183,6 +187,11 @@ static void print_proj(TB_PrintCallback callback, void* user_data, TB_Node* n, T
                     P("%c", 'a'+(index - 3));
                 }
             }
+            break;
+        }
+
+        case TB_NEVER_BRANCH: {
+            P(index ? "never" : "taken");
             break;
         }
 
@@ -242,7 +251,7 @@ static void print_graph_node(TB_Function* f, TB_PrintCallback callback, void* us
         P("}|");
     }
 
-    if (n->dt.type == TB_TUPLE) {
+    if (n->dt.type == TB_TAG_TUPLE) {
         TB_Node* projs[128] = { 0 };
         int limit = 0;
         FOR_USERS(u, n) {
@@ -297,7 +306,7 @@ static void print_graph_node(TB_Function* f, TB_PrintCallback callback, void* us
                 break;
             }
 
-            case TB_INTEGER_CONST: {
+            case TB_ICONST: {
                 TB_NodeInt* num = TB_NODE_GET_EXTRA(n);
                 if (num->value < 0xFFFF) {
                     P("cst: %"PRId64, num->value);
@@ -330,9 +339,9 @@ static void print_graph_node(TB_Function* f, TB_PrintCallback callback, void* us
         TB_Node* in = n->inputs[i];
 
         const char* color = "black";
-        if (in->dt.type == TB_CONTROL) {
+        if (in->dt.type == TB_TAG_CONTROL) {
             color = "red";
-        } else if (in->dt.type == TB_MEMORY) {
+        } else if (in->dt.type == TB_TAG_MEMORY) {
             color = "blue";
         }
 

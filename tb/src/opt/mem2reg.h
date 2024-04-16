@@ -161,7 +161,7 @@ static void fixup_mem_node(TB_Function* f, LocalSplitter* restrict ctx, TB_Node*
             latest[0] = curr;
         }
 
-        if (curr->dt.type == TB_TUPLE) {
+        if (curr->dt.type == TB_TAG_TUPLE) {
             // skip to mproj
             if (curr->type != TB_SPLITMEM) {
                 curr = next_mem_user(curr);
@@ -250,7 +250,7 @@ static void fixup_mem_node(TB_Function* f, LocalSplitter* restrict ctx, TB_Node*
                     set_input(f, use_n, latest[0], use_i);
                     latuni_set(f, use_n, NULL);
 
-                    assert(use_n->dt.type == TB_MEMORY);
+                    assert(use_n->dt.type == TB_TAG_MEMORY);
                     new_latest[0] = use_n;
 
                     // make extra alias phis
@@ -331,7 +331,7 @@ static void fixup_mem_node(TB_Function* f, LocalSplitter* restrict ctx, TB_Node*
     tb_arena_restore(tmp_arena, sp);
 }
 
-bool tb_opt_locals(TB_Function* f) {
+int tb_opt_locals(TB_Function* f) {
     TB_Arena* tmp_arena = f->tmp_arena;
     cuikperf_region_start("locals", NULL);
     assert(dyn_array_length(f->worklist->items) == 0);
@@ -393,7 +393,7 @@ bool tb_opt_locals(TB_Function* f) {
     if (!needs_to_rewrite) {
         tb_arena_restore(tmp_arena, sp);
         cuikperf_region_end();
-        return false;
+        return 0;
     }
 
     ctx.local_count = j;
@@ -472,5 +472,5 @@ bool tb_opt_locals(TB_Function* f) {
     nl_table_free(ctx.phi2local);
     tb_arena_restore(tmp_arena, sp);
     cuikperf_region_end();
-    return true;
+    return ctx.local_count;
 }

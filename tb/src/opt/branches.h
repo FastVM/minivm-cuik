@@ -37,7 +37,7 @@ static TB_Node* ideal_region(TB_Function* f, TB_Node* n) {
                         remove_input(f, USERN(use), i + 1);
                     }
                 }
-            } else if (cfg_is_region(n->inputs[i])) {
+            } else if (n->type == TB_REGION && n->inputs[i]->type == TB_REGION) {
                 #if 1
                 // pure regions can be collapsed into direct edges
                 if (n->inputs[i]->user_count == 1 && n->inputs[i]->input_count > 0) {
@@ -102,6 +102,11 @@ static TB_Node* ideal_region(TB_Function* f, TB_Node* n) {
         }
 
         if (changes) {
+            // affine loops can't be single edge
+            if (cfg_is_natural_loop(n) && n->input_count != 2) {
+                n->type = TB_REGION;
+            }
+
             f->invalidated_loops = true;
             return n->input_count == 1 ? n->inputs[0] : n;
         }
@@ -124,7 +129,7 @@ static TB_Node* ideal_phi(TB_Function* f, TB_Node* n) {
     // "switch" logic for data.
     TB_DataType dt = n->dt;
     TB_Node* region = n->inputs[0];
-    if (n->dt.type != TB_MEMORY) {
+    if (n->dt.type != TB_TAG_MEMORY) {
         if (region->input_count == 2) {
             // for now we'll leave multi-phi scenarios alone, we need
             // to come up with a cost-model around this stuff.
@@ -193,7 +198,7 @@ static TB_Node* ideal_phi(TB_Function* f, TB_Node* n) {
             }
         }
 
-        if (region->input_count > 2 && n->dt.type == TB_INT) {
+        if (region->input_count > 2 && n->dt.type == TB_TAG_INT) {
             if (region->inputs[0]->type != TB_BRANCH_PROJ || region->inputs[0]->inputs[0]->type != TB_BRANCH) {
                 return NULL;
             }
@@ -218,7 +223,7 @@ static TB_Node* ideal_phi(TB_Function* f, TB_Node* n) {
             // verify we have a really clean looking diamond shape
             FOR_N(i, 0, n->input_count - 1) {
                 if (region->inputs[i]->type != TB_BRANCH_PROJ || region->inputs[i]->inputs[0] != parent) return NULL;
-                if (n->inputs[1 + i]->type != TB_INTEGER_CONST) return NULL;
+                if (n->inputs[1 + i]->type != TB_ICONST) return NULL;
             }
 
             // convert to lookup node
@@ -321,7 +326,7 @@ static TB_Node* ideal_branch(TB_Function* f, TB_Node* n) {
                             set_input(f, n, before, 0);
 
                             // we wanna normalize into a comparison (not a boolean -> boolean)
-                            if (!(cmp->dt.type == TB_INT && cmp->dt.data == 1)) {
+                            if (!(cmp->dt.type == TB_TAG_INT && cmp->dt.data == 1)) {
                                 assert(!TB_IS_FLOAT_TYPE(cmp->dt) && "TODO");
                                 TB_Node* imm = make_int_node(f, cmp->dt, pred_falsey);
 
@@ -370,7 +375,7 @@ static TB_Node* ideal_branch(TB_Function* f, TB_Node* n) {
             }
 
             // br ((x != y) != 0) => br (x != y)
-            if ((cmp_type == TB_CMP_NE || cmp_type == TB_CMP_EQ) && cmp_node->inputs[2]->type == TB_INTEGER_CONST) {
+            if ((cmp_type == TB_CMP_NE || cmp_type == TB_CMP_EQ) && cmp_node->inputs[2]->type == TB_ICONST) {
                 uint64_t imm = TB_NODE_GET_EXTRA_T(cmp_node->inputs[2], TB_NodeInt)->value;
                 set_input(f, n, cmp_node->inputs[1], 1);
                 if_br->key = imm;
@@ -413,9 +418,18 @@ static Lattice* value_call(TB_Function* f, TB_Node* n) {
     // control just flows through
     l->elems[0] = latuni_get(f, n->inputs[0]);
 
-    Lattice* k = lattice_raw_intern(f->super.module, l, false);
+    Lattice* k = nbhs_intern(&f->super.module->lattice_elements, l);
     if (k != l) { tb_arena_free(arena, l, size); }
     return k;
+}
+
+static Lattice* value_never_branch(TB_Function* f, TB_Node* n) {
+    Lattice* before = latuni_get(f, n->inputs[0]);
+    if (before == &TOP_IN_THE_SKY) {
+        return &TOP_IN_THE_SKY;
+    }
+
+    return lattice_branch_goto(f, 2, 0);
 }
 
 static Lattice* value_branch(TB_Function* f, TB_Node* n) {
@@ -439,7 +453,10 @@ static Lattice* value_branch(TB_Function* f, TB_Node* n) {
 
         FOR_USERS(u, n) {
             TB_NodeBranchProj* path = TB_NODE_GET_EXTRA(USERN(u));
-            if (key_const == path->key) { taken = path->index; break; }
+            if (path->index > 0 && key_const == path->key) {
+                taken = path->index;
+                break;
+            }
         }
 
         return lattice_branch_goto(f, br->succ_count, taken);
@@ -481,7 +498,7 @@ static TB_Node* identity_safepoint(TB_Function* f, TB_Node* n) {
 static TB_Node* identity_region(TB_Function* f, TB_Node* n) {
     // fold out diamond shaped patterns
     TB_Node* same = n->inputs[0];
-    if (same->type == TB_BRANCH_PROJ && same->inputs[0]->type == TB_BRANCH) {
+    if (same->type == TB_BRANCH_PROJ && same->user_count == 1 && same->inputs[0]->type == TB_BRANCH) {
         same = same->inputs[0];
 
         // if it has phis... quit
@@ -490,12 +507,17 @@ static TB_Node* identity_region(TB_Function* f, TB_Node* n) {
         }
 
         FOR_N(i, 1, n->input_count) {
-            if (n->inputs[i]->type != TB_BRANCH_PROJ || n->inputs[i]->inputs[0] != same) {
+            if (n->inputs[i]->type != TB_BRANCH_PROJ || n->inputs[i]->user_count != 1 || n->inputs[i]->inputs[0] != same) {
                 return n;
             }
         }
 
         TB_Node* before = same->inputs[0];
+
+        // kill projections
+        FOR_USERS(u, before) {
+            tb_kill_node(f, USERN(u));
+        }
         tb_kill_node(f, same);
         return before;
     }

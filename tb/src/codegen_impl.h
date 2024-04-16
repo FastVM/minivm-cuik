@@ -165,6 +165,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
         // pointer math around stack slots will refer to this
         ctx.frame_ptr = tb_alloc_node(f, TB_MACH_FRAME_PTR, TB_TYPE_PTR, 1, 0);
         set_input(f, ctx.frame_ptr, f->root_node, 0);
+        ctx.frame_ptr = tb_opt_gvn_node(f, ctx.frame_ptr);
 
         // bottom-up rewrite:
         //   we keep the visited bits set once we've rewritten a node, unlike most worklist usage
@@ -178,10 +179,11 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
                 // replace with machine op
                 TB_Node* k = node_isel(&ctx, f, n);
                 if (k && k != n) {
-                    subsume_node(f, n, k);
-
                     // we could run GVN on machine ops :)
                     k = tb_opt_gvn_node(f, k);
+                    if (k != n) {
+                        subsume_node(f, n, k);
+                    }
 
                     // don't walk the replacement
                     worklist_test_n_set(&walker_ws, k);
@@ -196,14 +198,14 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
             worklist_free(&walker_ws);
         }
 
-        if (ctx.frame_ptr->users == NULL) {
+        if (ctx.frame_ptr->user_count == 0) {
             tb_kill_node(f, ctx.frame_ptr);
         }
 
         // dead node elim
         CUIK_TIMED_BLOCK("dead node elim") {
             for (TB_Node* n; n = worklist_pop(ws), n;) {
-                if (n->user_count == 0) { tb_kill_node(f, n); }
+                if (n->user_count == 0 && !is_proj(n)) { tb_kill_node(f, n); }
             }
         }
 
@@ -545,7 +547,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
 static void get_data_type_size(TB_DataType dt, size_t* out_size, size_t* out_align) {
     switch (dt.type) {
-        case TB_INT: {
+        case TB_TAG_INT: {
             // above 64bits we really dont care that much about natural alignment
             bool is_big_int = dt.data > 64;
 
@@ -556,9 +558,9 @@ static void get_data_type_size(TB_DataType dt, size_t* out_size, size_t* out_ali
             *out_align = is_big_int ? 8 : ((dt.data + 7) / 8);
             break;
         }
-        case TB_FLOAT32: *out_size = *out_align = 4; break;
-        case TB_FLOAT64: *out_size = *out_align = 8; break;
-        case TB_PTR:     *out_size = *out_align = 8; break;
+        case TB_TAG_F32: *out_size = *out_align = 4; break;
+        case TB_TAG_F64: *out_size = *out_align = 8; break;
+        case TB_TAG_PTR:     *out_size = *out_align = 8; break;
         default: tb_unreachable();
     }
 }

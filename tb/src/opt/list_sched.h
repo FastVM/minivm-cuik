@@ -19,7 +19,7 @@ static bool is_node_ready(TB_Function* f, TB_Worklist* ws, TB_BasicBlock* bb, TB
     }
 
     // anti-deps
-    if (is_mem_out_op(n) || n->dt.type == TB_MEMORY) {
+    if (is_mem_out_op(n) || n->dt.type == TB_TAG_MEMORY) {
         FOR_USERS(u, n->inputs[1]) {
             TB_Node* un = USERN(u);
             if (n != un && USERI(u) == 1) {
@@ -41,7 +41,7 @@ static ArenaArray(ReadyNode) ready_up(ArenaArray(ReadyNode) ready, Set* ready_se
     set_put(ready_set, n->gvn);
 
     // projections are readied but not in the ready list
-    if (n->dt.type == TB_TUPLE) FOR_USERS(u, n) {
+    if (n->dt.type == TB_TAG_TUPLE) FOR_USERS(u, n) {
         if (is_proj(USERN(u))) { set_put(ready_set, USERN(u)->gvn); }
     }
 
@@ -98,7 +98,7 @@ void tb_list_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(Ph
     // fill up initial ready list (everything used by the live-ins)
     nl_hashset_for(e, &bb->items) {
         TB_Node* n = *e;
-        if (!worklist_test(ws, n) && f->scheduled[n->gvn] == bb && is_node_ready(f, ws, bb, n)) {
+        if (!worklist_test(ws, n) && end != n && f->scheduled[n->gvn] == bb && is_node_ready(f, ws, bb, n)) {
             ready = ready_up(ready, &ready_set, n, get_lat(f, n));
         }
     }
@@ -106,8 +106,8 @@ void tb_list_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(Ph
     TB_Node* cmp = NULL;
 
     // TODO(NeGate): we shouldn't do this on VLIWs, ideally we schedule predication earlier there
-    if (end->type == TB_BRANCH && f->scheduled[end->inputs[1]->gvn] == bb && end->inputs[1]->user_count == 1 &&
-        end->inputs[1]->type != TB_PROJ && end->inputs[1]->type != TB_MACH_PROJ) {
+    if ((end->type == TB_BRANCH || end->type == TB_AFFINE_LATCH) && f->scheduled[end->inputs[1]->gvn] == bb &&
+        end->inputs[1]->user_count == 1 && !is_proj(end->inputs[1])) {
         cmp = end->inputs[1];
     }
 
@@ -131,12 +131,12 @@ void tb_list_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(Ph
             in_use_mask |= unit_i;
             stall = false;
 
-            assert(n->type != TB_PROJ);
+            assert(!is_proj(n));
             worklist_push(ws, n);
 
             // make sure to place all projections directly after their tuple node
-            if (n->dt.type == TB_TUPLE) {
-                assert(n->type != TB_BRANCH && "branches should only show up as the end node which can't be here");
+            if (n->dt.type == TB_TAG_TUPLE) {
+                assert(!cfg_is_fork(n) && "branches should only show up as the end node which can't be here");
                 FOR_USERS(u, n) if (is_proj(USERN(u))) {
                     assert(USERI(u) == 0);
                     assert(!worklist_test(ws, USERN(u)));
@@ -164,7 +164,7 @@ void tb_list_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(Ph
             if (n != end && n != cmp) {
                 FOR_USERS(u, n) {
                     TB_Node* un = USERN(u);
-                    if (un->type == TB_PROJ || un->type == TB_MACH_PROJ) {
+                    if (is_proj(un)) {
                         // projections are where all the real users ended up
                         FOR_USERS(proj_u, un) {
                             if (USERN(proj_u) != end && USERN(proj_u) != cmp && can_ready_user(f, ws, bb, &ready_set, USERN(proj_u))) {

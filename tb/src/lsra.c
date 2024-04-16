@@ -960,7 +960,7 @@ static TB_BasicBlock* find_bb_at_time(Ctx* restrict ctx, TB_Function* f, int pos
 static bool rematerialize(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg, int pos) {
     TB_Function* f = ctx->f;
     TB_Node* n     = vreg->n;
-    if (n->type != TB_INTEGER_CONST) {
+    if (n->type != TB_ICONST) {
         return false;
     }
 
@@ -970,7 +970,7 @@ static bool rematerialize(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg, int 
 
     // cut off range
     Range* prev = NULL;
-    for (Range* r = vreg->active_range; r; prev = r, r = r->next) {
+    for (Range* r = vreg->saved_range; r; prev = r, r = r->next) {
         if (r->end >= pos) {
             if (pos < r->start) { // clean split?
                 assert(prev);
@@ -990,7 +990,7 @@ static bool rematerialize(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg, int 
         RegMask* in_mask = constraint_in(ctx, use_n, use_i);
         if (ra->time[use_n->gvn] >= pos && in_mask != &TB_REG_EMPTY) {
             // reload per use site
-            TB_Node* reload_n = tb_alloc_node(f, TB_INTEGER_CONST, n->dt, 1, sizeof(TB_NodeInt));
+            TB_Node* reload_n = tb_alloc_node(f, TB_ICONST, n->dt, 1, sizeof(TB_NodeInt));
             set_input(f, use_n, reload_n, use_i);
             TB_NODE_SET_EXTRA(reload_n, TB_NodeInt, .value = value);
 
@@ -1108,13 +1108,16 @@ static VReg* split_intersecting(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg
 
     // split ranges
     Range* prev = NULL;
-    for (Range* r = vreg->active_range; r; prev = r, r = r->next) {
+    for (Range* r = vreg->saved_range; r; prev = r, r = r->next) {
         if (r->end >= pos) {
             bool clean_split = pos < r->start;
 
             // spill_vreg will keep r, if the split's unclean we'll hand a split copy to
             // spill_vreg (and then that piece will point to NULL_RANGE)
             if (clean_split) {
+                if (prev == NULL) {
+                    dump_sched(ctx, ra);
+                }
                 assert(prev);
                 prev->next = &NULL_RANGE;
             } else {
@@ -1125,12 +1128,12 @@ static VReg* split_intersecting(Ctx* restrict ctx, LSRA* restrict ra, VReg* vreg
                 rg->end   = pos;
 
                 if (prev) { prev->next = rg; }
-                else { vreg->active_range = rg; }
+                else { vreg->active_range = vreg->saved_range = rg; }
 
                 // spill_vreg's new start position is split
                 r->start = pos;
             }
-            spill_vreg->active_range = r;
+            spill_vreg->saved_range = spill_vreg->active_range = r;
             break;
         }
     }
