@@ -4,39 +4,16 @@ typedef struct {
     TB_CFG cfg;
 } PrinterCtx;
 
-static void print_type(TB_DataType dt) {
+static int print_type(TB_DataType dt) {
     switch (dt.type) {
-        case TB_TAG_INT: {
-            if (dt.data == 0) printf("void");
-            else printf("i%d", dt.data);
-            break;
-        }
-        case TB_TAG_PTR: {
-            if (dt.data == 0) printf("ptr");
-            else printf("ptr%d", dt.data);
-            break;
-        }
-        case TB_TAG_F32: {
-            printf("f32");
-            break;
-        }
-        case TB_TAG_F64: {
-            printf("f64");
-            break;
-        }
-        case TB_TAG_TUPLE: {
-            printf("tuple");
-            break;
-        }
-        case TB_TAG_CONTROL: {
-            printf("ctrl");
-            break;
-        }
-        case TB_TAG_MEMORY: {
-            printf("mem");
-            break;
-        }
-        default: tb_todo();
+        case TB_TAG_INT:     return dt.data == 0 ? printf("void") : printf("i%d", dt.data);
+        case TB_TAG_PTR:     return dt.data == 0 ? printf("ptr") : printf("ptr%d", dt.data);
+        case TB_TAG_F32:     return printf("f32");
+        case TB_TAG_F64:     return printf("f64");
+        case TB_TAG_TUPLE:   return printf("tuple");
+        case TB_TAG_CONTROL: return printf("ctrl");
+        case TB_TAG_MEMORY:  return printf("mem");
+        default: tb_todo();  return 0;
     }
 }
 
@@ -78,15 +55,15 @@ static void print_ref_to_node(PrinterCtx* ctx, TB_Node* n, bool def) {
         }
     } else if (cfg_is_region(n)) {
         TB_NodeRegion* r = TB_NODE_GET_EXTRA(n);
-        if (r->tag != NULL) {
-            printf(".%s", r->tag);
-        } else {
-            ptrdiff_t i = try_find_traversal_index(&ctx->cfg, n);
-            if (i >= 0) {
-                printf(".bb%zu", i);
+        ptrdiff_t i = try_find_traversal_index(&ctx->cfg, n);
+        if (i >= 0) {
+            if (r->tag != NULL) {
+                printf(".bb%zu.%s", i, r->tag);
             } else {
-                printf("*DEAD*");
+                printf(".bb%zu", i);
             }
+        } else {
+            printf("*DEAD*");
         }
 
         if (def) {
@@ -353,16 +330,6 @@ static void print_bb(PrinterCtx* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                     case TB_BITCAST:
                     break;
 
-                    case TB_MEMBER_ACCESS: {
-                        printf(", %"PRId64, TB_NODE_GET_EXTRA_T(n, TB_NodeMember)->offset);
-                        break;
-                    }
-
-                    case TB_ARRAY_ACCESS: {
-                        printf(", %"PRId64, TB_NODE_GET_EXTRA_T(n, TB_NodeArray)->stride);
-                        break;
-                    }
-
                     case TB_PROJ: {
                         printf(", %d", TB_NODE_GET_EXTRA_T(n, TB_NodeProj)->index);
                         break;
@@ -507,7 +474,7 @@ void tb_print(TB_Function* f, TB_Arena* tmp) {
     ctx.cfg = tb_compute_rpo(f, &ws);
 
     // schedule nodes
-    tb_global_schedule(f, &ws, ctx.cfg, false, NULL);
+    tb_global_schedule(f, &ws, ctx.cfg, false, false, NULL);
 
     TB_Node* end_bb = NULL;
     FOR_N(i, 0, ctx.cfg.block_count) {

@@ -72,6 +72,7 @@ for (uint64_t _bits_ = (bits), it = (start); _bits_; _bits_ >>= 1, ++it) if (_bi
 #define TB_OPTDEBUG_SROA     0
 #define TB_OPTDEBUG_GCM      0
 #define TB_OPTDEBUG_MEM2REG  0
+#define TB_OPTDEBUG_ISEL     0
 #define TB_OPTDEBUG_CODEGEN  0
 #define TB_OPTDEBUG_DATAFLOW 0
 #define TB_OPTDEBUG_INLINE   0
@@ -300,6 +301,10 @@ struct TB_BasicBlock {
     TB_Node* end;
     int id, dom_depth;
 
+    // shitty estimate for now
+    float freq;
+    TB_BasicBlock* loop;
+
     // used by codegen to track the associated machine BB
     int order;
 
@@ -415,7 +420,7 @@ struct TB_Function {
 
         // nice stats
         struct {
-            #if TB_OPTDEBUG_PEEP || TB_OPTDEBUG_SCCP
+            #if TB_OPTDEBUG_PEEP || TB_OPTDEBUG_SCCP || TB_OPTDEBUG_ISEL
             int time;
             #endif
 
@@ -558,6 +563,7 @@ struct ICodeGen {
     size_t (*extra_bytes)(TB_Node* n);
     const char* (*node_name)(TB_Node* n);
     void (*print_extra)(TB_Node* n);
+    void (*print_dumb_extra)(TB_Node* n);
 
     void (*get_data_type_size)(TB_DataType dt, size_t* out_size, size_t* out_align);
     // return the number of non-local patches

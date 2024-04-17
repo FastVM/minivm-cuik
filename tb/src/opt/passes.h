@@ -8,8 +8,13 @@ enum {
     FAST_IDOM_LIMIT = 20
 };
 
+#if TB_PACKED_USERS
+#define USERN(u) ((TB_Node*) ((u)->_n)) // node
+#define USERI(u) ((int) ((u)->_slot))   // index
+#else
 #define USERN(u) ((u)->_n)    // node
 #define USERI(u) ((u)->_slot) // index
+#endif
 
 #define FOR_USERS(u, n) for (TB_User *u = (n)->users, *_end_ = &u[(n)->user_count]; u != _end_; u++)
 
@@ -132,6 +137,10 @@ typedef struct {
     TB_Function** ws;
 } IPOSolver;
 
+static bool cant_signed_overflow(TB_Node* n) {
+    return TB_NODE_GET_EXTRA_T(n, TB_NodeBinopInt)->ab & TB_ARITHMATIC_NSW;
+}
+
 static bool is_proj(TB_Node* n) {
     return n->type == TB_PROJ || n->type == TB_MACH_PROJ || n->type == TB_BRANCH_PROJ;
 }
@@ -214,6 +223,16 @@ static bool single_use(TB_Node* n) {
 ////////////////////////////////
 // CFG analysis
 ////////////////////////////////
+static bool cfg_has_non_mem_phis(TB_Node* n) {
+    if (!cfg_is_region(n)) { return false; }
+    FOR_USERS(u, n) {
+        if (USERN(u)->type == TB_PHI && USERN(u)->dt.type != TB_TAG_MEMORY) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // if we see a branch projection, it may either be a BB itself
 // or if it enters a REGION directly, then that region is the BB.
 static TB_Node* cfg_next_bb_after_cproj(TB_Node* proj) {
@@ -222,12 +241,23 @@ static TB_Node* cfg_next_bb_after_cproj(TB_Node* proj) {
 
     assert(proj->user_count >= 1 && "missing successor after cproj");
     TB_Node* r = USERN(proj->users);
-    if (!single_use(proj) || r->type != TB_REGION) {
+    if (!single_use(proj) || !cfg_is_region(r)) {
         // multi-user proj, this means it's basically a BB
         return proj;
     }
 
-    if (r->type == TB_REGION) {
+    int blocks_with_phis = 0;
+    FOR_USERS(u, n) {
+        TB_Node* path = USERN(u);
+        if (cfg_is_cproj(path) && single_use(path)) {
+            TB_Node* next = USERN(path->users);
+            if (cfg_has_non_mem_phis(next)) {
+                blocks_with_phis++;
+            }
+        }
+    }
+
+    if (blocks_with_phis > 1) {
         FOR_USERS(u, r) {
             if (USERN(u)->type == TB_PHI && USERN(u)->dt.type != TB_TAG_MEMORY) {
                 return proj;
@@ -256,7 +286,7 @@ static TB_User* cfg_next_user(TB_Node* n) {
 }
 
 static bool cfg_has_phis(TB_Node* n) {
-    if (n->type != TB_REGION) { return false; }
+    if (!cfg_is_region(n)) { return false; }
     FOR_USERS(u, n) {
         if (USERN(u)->type == TB_PHI) { return true; }
     }
@@ -283,7 +313,7 @@ static TB_Node* cfg_get_pred(TB_CFG* cfg, TB_Node* n, int i) {
     n = n->inputs[i];
     for (;;) {
         ptrdiff_t search = nl_map_get(cfg->node_to_block, n);
-        if (search >= 0 || n->type == TB_DEAD || n->type == TB_REGION) {
+        if (search >= 0 || n->type == TB_DEAD || cfg_is_region(n)) {
             return n;
         }
 
@@ -363,16 +393,17 @@ void subsume_node2(TB_Function* f, TB_Node* n, TB_Node* new_n);
 void tb__gvn_remove(TB_Function* f, TB_Node* n);
 
 // Scheduler's cost model crap (talk about these in codegen_impl.h)
-typedef int (*TB_GetLatency)(TB_Function* f, TB_Node* n);
+typedef int (*TB_GetLatency)(TB_Function* f, TB_Node* n, TB_Node* end);
 typedef uint64_t (*TB_GetUnitMask)(TB_Function* f, TB_Node* n);
 
 // Local scheduler
 void tb_list_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(PhiVal*) phi_vals, TB_BasicBlock* bb, TB_GetLatency get_lat, TB_GetUnitMask get_unit_mask, int unit_count);
 void tb_greedy_scheduler(TB_Function* f, TB_CFG* cfg, TB_Worklist* ws, DynArray(PhiVal*) phi_vals, TB_BasicBlock* bb);
+void tb_dataflow(TB_Function* f, TB_Arena* arena, TB_CFG cfg, TB_Node** rpo_nodes);
 
 // Global scheduler
 void tb_renumber_nodes(TB_Function* f, TB_Worklist* ws);
-void tb_global_schedule(TB_Function* f, TB_Worklist* ws, TB_CFG cfg, bool dataflow, TB_GetLatency get_lat);
+void tb_global_schedule(TB_Function* f, TB_Worklist* ws, TB_CFG cfg, bool loop_nests, bool dataflow, TB_GetLatency get_lat);
 
 // makes arch-friendly IR
 void tb_opt_legalize(TB_Function* f, TB_Arch arch);

@@ -36,6 +36,7 @@ void daxpy2(long long n, double a, double* x, double* y, bool enable) {
 }
 #endif
 
+#if 0
 void matmul(float* c, float* a, float* b) {
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
@@ -53,6 +54,16 @@ void matmul(float* c, float* a, float* b) {
     }
     c[j*4 + i] = sum;*/
 }
+#else
+int* bar;
+int foo(int n) {
+    int i = 0;
+    for (; i < n; i++) {
+        bar[i] = 16;
+    }
+    return i;
+}
+#endif
 
 /*
 matmul:                                 // @matmul

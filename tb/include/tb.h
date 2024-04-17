@@ -367,11 +367,8 @@ typedef enum TB_NodeTypeEnum {
     TB_LOCAL,         // () & (Int, Int) -> Ptr
     //   SYMBOL will return a pointer to a TB_Symbol
     TB_SYMBOL,        // () & TB_Symbol* -> Ptr
-    //   offsets pointer by constant value
-    TB_MEMBER_ACCESS, // Ptr & Int -> Ptr
-    //   arguments represent base, index, and stride respectively
-    //   and will perform `base + index*stride`
-    TB_ARRAY_ACCESS,  // (Ptr, Int) & Int -> Ptr
+    //   offsets pointer by byte amount (handles all ptr math you actually want)
+    TB_PTR_OFFSET,    // (Ptr, Int) -> Ptr
 
     // Conversions
     TB_TRUNCATE,
@@ -576,8 +573,13 @@ typedef struct {
 typedef struct TB_Node TB_Node;
 
 typedef struct {
+    #if TB_PACKED_USERS
+    uint64_t _n    : 48;
+    uint64_t _slot : 16;
+    #else
     TB_Node* _n;
     int _slot;
+    #endif
 } TB_User;
 
 // my annotations about size are based on 64bit machines
@@ -677,14 +679,6 @@ typedef struct {
 typedef struct {
     double value;
 } TB_NodeFloat64;
-
-typedef struct {
-    int64_t stride;
-} TB_NodeArray;
-
-typedef struct {
-    int64_t offset;
-} TB_NodeMember;
 
 typedef struct {
     // if true, we just duplicate the input memory per projection
@@ -1488,6 +1482,9 @@ TB_API TB_Node* tb_opt_peep_node(TB_Function* f, TB_Node* n);
 
 // Trust me bro, just use my configs
 TB_API void tb_opt(TB_Function* f, TB_Worklist* ws, TB_Arena* ir, TB_Arena* tmp, bool preserve_types);
+
+// Asserts on all kinds of broken behavior, dumps to stderr (i will change that later)
+TB_API void tb_verify(TB_Function* f, TB_Arena* tmp);
 
 // print in SSA-CFG looking form (with BB params for the phis)
 TB_API void tb_print(TB_Function* f, TB_Arena* tmp);

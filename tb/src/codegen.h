@@ -34,6 +34,7 @@
 #include "opt/passes.h"
 #include "emitter.h"
 #include <log.h>
+#include <math.h>
 #include <arena_array.h>
 
 enum {
@@ -105,9 +106,14 @@ struct VReg {
 
     RegMask* mask;
 
+    // spill cost (sum of block_freq * uses_in_block)
+    //   NaN if not computed yet
+    float spill_cost;
+    int hint_vreg;
+
     // only matters for linear-scan
     struct {
-        int end_time, hint_vreg;
+        int end_time;
         Range* active_range;
         Range* saved_range;
     };
@@ -148,6 +154,7 @@ struct Ctx {
     TB_Function* f;
     TB_FeatureSet features;
     TB_Node* frame_ptr;
+    TB_CFG cfg;
 
     // user callbacks
     TmpCount tmp_count;
@@ -172,6 +179,7 @@ struct Ctx {
     // Basic blocks
     int bb_count;
     MachineBB* machine_bbs;
+    TB_Worklist* walker_ws;
 
     // used when calling node_constraint since it needs an array, we
     // figure out the max input count of all nodes before allocating it.
@@ -227,6 +235,25 @@ static bool tb__reg_mask_less(Ctx* ctx, RegMask* a, RegMask* b) {
 static VReg* vreg_at(Ctx* ctx, int id)       { return id > 0 ? &ctx->vregs[id] : NULL; }
 static VReg* node_vreg(Ctx* ctx, TB_Node* n) { return n && ctx->vreg_map[n->gvn] > 0 ? &ctx->vregs[ctx->vreg_map[n->gvn]] : NULL; }
 
+static float get_spill_cost(Ctx* restrict ctx, VReg* vreg) {
+    if (!isnan(vreg->spill_cost)) {
+        return vreg->spill_cost;
+    } else if (vreg->n->type == TB_ICONST) {
+        // these can rematerialize
+        return (vreg->spill_cost = -1.0f);
+    }
+
+    float c = 0.0f;
+
+    // sum of (block_freq * uses_in_block)
+    FOR_USERS(u, vreg->n) {
+        TB_Node* un = USERN(u);
+        c += ctx->f->scheduled[un->gvn]->freq;
+    }
+
+    return (vreg->spill_cost = c);
+}
+
 static bool reg_mask_eq(RegMask* a, RegMask* b) {
     if (a->count != b->count) { return false; }
     FOR_N(i, 0, a->count) {
@@ -266,7 +293,7 @@ static int fixed_reg_mask(RegMask* mask) {
 }
 
 static RegMask* new_regmask(TB_Function* f, int reg_class, bool may_spill, uint64_t mask) {
-    RegMask* rm = tb_arena_alloc(f->tmp_arena, sizeof(RegMask) + sizeof(uint64_t));
+    RegMask* rm = tb_arena_alloc(f->arena, sizeof(RegMask) + sizeof(uint64_t));
     rm->may_spill = may_spill;
     rm->class = reg_class;
     rm->count = 1;
@@ -300,7 +327,7 @@ static RegMask* intern_regmask(Ctx* ctx, int reg_class, bool may_spill, uint64_t
     RegMask* new_rm = new_regmask(ctx->f, reg_class, may_spill, mask);
     RegMask* old_rm = nl_hashset_put2(&ctx->mask_intern, new_rm, rm_hash, rm_compare);
     if (old_rm != NULL) {
-        tb_arena_free(ctx->f->tmp_arena, new_rm, sizeof(RegMask));
+        tb_arena_free(ctx->f->arena, new_rm, sizeof(RegMask));
         return old_rm;
     }
     return new_rm;

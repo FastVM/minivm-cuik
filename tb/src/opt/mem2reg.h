@@ -47,7 +47,7 @@ static bool good_mem_op(TB_Function* f, TB_Node* n) { // ld, st, memcpy, memset
 }
 
 static bool same_base(TB_Node* a, TB_Node* b) {
-    while (b->type == TB_MEMBER_ACCESS || b->type == TB_ARRAY_ACCESS) {
+    while (b->type == TB_PTR_OFFSET) {
         if (a == b) return true;
         b = b->inputs[1];
     }
@@ -64,8 +64,7 @@ static TB_Node* next_mem_user(TB_Node* n) {
 }
 
 static int categorize_alias_idx(LocalSplitter* restrict ctx, TB_Node* n) {
-    // skip any member or array accesses
-    while (n->type == TB_ARRAY_ACCESS || n->type == TB_MEMBER_ACCESS) {
+    while (n->type == TB_PTR_OFFSET) {
         n = n->inputs[1];
     }
 
@@ -282,23 +281,34 @@ static void fixup_mem_node(TB_Function* f, LocalSplitter* restrict ctx, TB_Node*
                     mark_node(f, use_n);
                     fixup_mem_node(f, ctx, use_n, new_latest);
                 } else if (v == &RENAME_DUMMY) {
-                    FOR_USERS(phi, region) if (USERN(phi)->type == TB_PHI) {
-                        Rename* name = nl_table_get(&ctx->phi2local, USERN(phi));
-                        if (name == &RENAME_DUMMY) {
-                            set_input(f, USERN(phi), latest[0], use_i);
-                        } else if (name) {
-                            if (name->alias_idx < 0) {
-                                TB_Node* val = latest[1 + (name - ctx->renames)];
-                                if (val->dt.raw != USERN(phi)->dt.raw) {
-                                    // insert bitcast
-                                    TB_Node* cast = tb_alloc_node(f, TB_BITCAST, USERN(phi)->dt, 2, 0);
-                                    set_input(f, cast, val, 1);
-                                    val = cast;
-                                }
+                    for (size_t i = 0; i < region->user_count; i++) {
+                        TB_Node* un = USERN(&region->users[i]);
+                        int ui      = USERI(&region->users[i]);
+                        if (un->type == TB_PHI) {
+                            Rename* name = nl_table_get(&ctx->phi2local, un);
+                            if (name == &RENAME_DUMMY) {
+                                assert(latest[0]);
+                                set_input(f, un, latest[0], use_i);
+                            } else if (name) {
+                                if (name->alias_idx < 0) {
+                                    TB_Node* val = latest[1 + (name - ctx->renames)];
+                                    if (val == NULL) {
+                                        // let's just insert poison, maybe it'll be
+                                        // completely unreferenced later (ideally)
+                                        val = make_poison(f, un->dt);
+                                    } else if (val->dt.raw != un->dt.raw) {
+                                        // insert bitcast
+                                        TB_Node* cast = tb_alloc_node(f, TB_BITCAST, un->dt, 2, 0);
+                                        set_input(f, cast, val, 1);
+                                        val = cast;
+                                    }
 
-                                set_input(f, USERN(phi), val, use_i);
-                            } else {
-                                set_input(f, USERN(phi), latest[1 + (name - ctx->renames)], use_i);
+                                    set_input(f, un, val, use_i);
+                                } else {
+                                    TB_Node* mem = latest[1 + (name - ctx->renames)];
+                                    assert(mem);
+                                    set_input(f, un, mem, use_i);
+                                }
                             }
                         }
                     }
@@ -359,9 +369,11 @@ int tb_opt_locals(TB_Function* f) {
         RenameMode mode = RENAME_VALUE;
 
         FOR_USERS(mem, addr) {
-            if (USERI(mem) == 1 && (USERN(mem)->type == TB_MEMBER_ACCESS || USERN(mem)->type == TB_ARRAY_ACCESS)) {
+            if (USERI(mem) == 1 && USERN(mem)->type == TB_PTR_OFFSET) {
                 // pointer arith are also fair game, since they'd stay in bounds (given no UB)
-                mode = RENAME_MEMORY;
+                // mode = RENAME_MEMORY;
+                mode = RENAME_NONE;
+                break;
             } else if (USERI(mem) != 2 || !good_mem_op(f, USERN(mem))) {
                 mode = RENAME_NONE;
                 break;

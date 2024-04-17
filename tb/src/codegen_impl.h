@@ -46,7 +46,7 @@ static void on_basic_block(Ctx* restrict ctx, TB_CGEmitter* e, int bb);
 // Scheduling bits:
 //   simple latency until the results of a node are useful (list scheduler will
 //   generally prioritize dispatching higher latency ops first).
-static int node_latency(TB_Function* f, TB_Node* n);
+static int node_latency(TB_Function* f, TB_Node* n, TB_Node* end);
 //   on VLIWs it's important that we keep track of which functional units a specific
 //   node can even run on, use the bits to represent that (at most you can make 64
 //   functional units in the current design but i don't think i need more than 10 rn)
@@ -119,7 +119,7 @@ static void log_phase_end(TB_Function* f, size_t og_size, const char* label) {
 }
 
 static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restrict func_out, const TB_FeatureSet* features, TB_Arena* code_arena, bool emit_asm) {
-    TB_OPTDEBUG(CODEGEN)(tb_print(f, f->tmp_arena));
+    TB_OPTDEBUG(CODEGEN)(tb_print_dumb(f, false));
 
     TB_Arena* arena = f->tmp_arena;
     TB_ArenaSavepoint sp = tb_arena_save(arena);
@@ -166,15 +166,17 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
         ctx.frame_ptr = tb_alloc_node(f, TB_MACH_FRAME_PTR, TB_TYPE_PTR, 1, 0);
         set_input(f, ctx.frame_ptr, f->root_node, 0);
         ctx.frame_ptr = tb_opt_gvn_node(f, ctx.frame_ptr);
+        ctx.walker_ws = &walker_ws;
 
         // bottom-up rewrite:
         //   we keep the visited bits set once we've rewritten a node, unlike most worklist usage
         //   which unsets a bit once it's popped from the items array.
         CUIK_TIMED_BLOCK("rewriting") {
             worklist_push(&walker_ws, f->root_node);
-
             while (dyn_array_length(walker_ws.items) > 0) {
                 TB_Node* n = dyn_array_pop(walker_ws.items);
+
+                TB_OPTDEBUG(ISEL)(printf("ISEL t=%d? ", ++f->stats.time), tb_print_dumb_node(NULL, n));
 
                 // replace with machine op
                 TB_Node* k = node_isel(&ctx, f, n);
@@ -185,14 +187,24 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
                         subsume_node(f, n, k);
                     }
 
+                    TB_OPTDEBUG(ISEL)(printf(" => \x1b[32m"), tb_print_dumb_node(NULL, k), printf("\x1b[0m"));
+
                     // don't walk the replacement
                     worklist_test_n_set(&walker_ws, k);
                     n = k;
                 }
+                TB_OPTDEBUG(ISEL)(printf("\n"));
 
                 // replace all input edges
                 FOR_REV_N(i, 0, n->input_count) if (n->inputs[i]) {
                     worklist_push(&walker_ws, n->inputs[i]);
+                }
+
+                // mark phis if we're on a region
+                if (cfg_is_region(n)) {
+                    FOR_USERS(u, n) if (USERN(u)->type == TB_PHI) {
+                        worklist_push(&walker_ws, USERN(u));
+                    }
                 }
             }
             worklist_free(&walker_ws);
@@ -219,10 +231,9 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
         tb_renumber_nodes(f, ws);
 
         TB_OPTDEBUG(CODEGEN)(tb_print_dumb(f, false));
-        TB_OPTDEBUG(CODEGEN)(tb_print(f, arena));
 
-        cfg = tb_compute_rpo(f, ws);
-        tb_global_schedule(f, ws, cfg, true, node_latency);
+        ctx.cfg = cfg = tb_compute_rpo(f, ws);
+        tb_global_schedule(f, ws, cfg, true, true, node_latency);
 
         log_phase_end(f, og_size, "GCM");
     }
@@ -351,7 +362,9 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     CUIK_TIMED_BLOCK("gather RA constraints") {
         FOR_N(i, 0, bb_count) {
             MachineBB* mbb = &ctx.machine_bbs[i];
-            TB_OPTDEBUG(CODEGEN)(printf("BB %zu\n", i));
+
+            TB_BasicBlock* bb = f->scheduled[mbb->n->gvn];
+            TB_OPTDEBUG(CODEGEN)(printf("BB %zu (freq=%.2f)\n", i, bb->freq));
 
             aarray_for(j, mbb->items) {
                 TB_Node* n = mbb->items[j];
@@ -372,7 +385,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
                 FOR_N(j, 1, n->input_count) {
                     if (n->inputs[j] && ctx.ins[j] != &TB_REG_EMPTY) {
-                        printf("    IN[%zu]  = ", j), tb__print_regmask(ctx.ins[j]), printf(" v%d\n", n->inputs[j]->gvn);
+                        printf("    IN[%zu]  = ", j), tb__print_regmask(ctx.ins[j]), printf(" %%%d\n", n->inputs[j]->gvn);
                     }
                 }
 
@@ -385,7 +398,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
                 if (vreg_id > 0 && n->type != TB_MACH_MOVE) {
                     RegMask* def_mask = node_constraint(&ctx, n, NULL);
-                    ctx.vregs[vreg_id] = (VReg){ .n = n, .mask = def_mask, .assigned = -1 };
+                    ctx.vregs[vreg_id] = (VReg){ .n = n, .mask = def_mask, .assigned = -1, .spill_cost = NAN };
                 }
             }
         }
@@ -560,7 +573,7 @@ static void get_data_type_size(TB_DataType dt, size_t* out_size, size_t* out_ali
         }
         case TB_TAG_F32: *out_size = *out_align = 4; break;
         case TB_TAG_F64: *out_size = *out_align = 8; break;
-        case TB_TAG_PTR:     *out_size = *out_align = 8; break;
+        case TB_TAG_PTR: *out_size = *out_align = 8; break;
         default: tb_unreachable();
     }
 }
