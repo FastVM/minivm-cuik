@@ -1073,7 +1073,7 @@ static void c_fmt_bb(CFmtState* ctx, TB_Worklist* ws, TB_Node* bb_start) {
                 c_fmt_output(ctx, n);
                 nl_buffer_format(ctx->buf, "(void*) ((char *) ");
                 c_fmt_ref_to_node(ctx, ptr);
-                nl_buffer_format(ctx->buf, " + ");
+                nl_buffer_format(ctx->buf, " + (size_t) ");
                 c_fmt_ref_to_node(ctx, off);
                 nl_buffer_format(ctx->buf, ");\n");
                 break;
