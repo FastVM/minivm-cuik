@@ -336,7 +336,7 @@ typedef enum TB_NodeTypeEnum {
     //   they don't alias there's no ordering guarentee.
     TB_MERGEMEM,    // (Split, Memory...) -> Memory
     //   LOAD and STORE are standard memory accesses, they can be folded away.
-    TB_LOAD,        // (Control?, Memory, Ptr)       -> Data
+    TB_LOAD,        // (Control?, Memory, Ptr)      -> Data
     TB_STORE,       // (Control, Memory, Ptr, Data) -> Memory
     //   bulk memory ops.
     TB_MEMCPY,      // (Control, Memory, Ptr, Ptr, Size)  -> Memory
@@ -381,7 +381,7 @@ typedef enum TB_NodeTypeEnum {
     TB_ZERO_EXT,
     TB_UINT2FLOAT,
     TB_FLOAT2UINT,
-    TB_TAG_INT2FLOAT,
+    TB_INT2FLOAT,
     TB_FLOAT2INT,
     TB_BITCAST,
 
@@ -396,6 +396,7 @@ typedef enum TB_NodeTypeEnum {
 
     // Unary operations
     TB_NEG,
+    TB_FNEG,
 
     // Integer arithmatic
     TB_AND,

@@ -24,6 +24,8 @@ static int node_tmp_count(Ctx* restrict ctx, TB_Node* n);
 //   return -1 if it's not a 2addr and anything else to represent which edge
 //   doesn't alias the dst.
 static int node_2addr(TB_Node* n);
+//   returns true if it's possible to rematerialize rather than spill this node.
+static bool node_remat(TB_Node* n);
 
 // Code emit:
 //   finally write bytes, this is done post-RA so you're expected to use the VReg data
@@ -67,8 +69,10 @@ static void tb__print_regmask(RegMask* mask) {
     if (mask->class == REG_CLASS_STK) {
         if (mask->mask[0] == 0) {
             printf("[any spill]");
+        } else if (mask->mask[0] >= STACK_BASE_REG_NAMES) {
+            printf("[SPILL%"PRId64"]", mask->mask[0] - STACK_BASE_REG_NAMES);
         } else {
-            printf("[SP + %"PRId64"]", mask->mask[0]*8);
+            printf("[STK%"PRId64"]", mask->mask[0]);
         }
     } else if (mask->mask[0] == 0) {
         printf("[SPILL]");
@@ -117,12 +121,17 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     TB_Arena* arena = f->tmp_arena;
     TB_ArenaSavepoint sp = tb_arena_save(arena);
 
+    #ifndef NDEBUG
+    tb_arena_reset_peak(arena);
+    #endif
+
     Ctx ctx = {
         .module = f->super.module,
         .f = f,
         .tmp_count   = node_tmp_count,
         .constraint  = node_constraint,
         .node_2addr  = node_2addr,
+        .remat       = node_remat,
         .num_classes = REG_CLASS_COUNT,
         .emit = {
             .output = func_out,
@@ -407,7 +416,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
     CUIK_TIMED_BLOCK("emit") {
         // allocate entire top of the code arena (we'll trim it later if possible)
-        ctx.emit.capacity = code_arena->high_point - code_arena->watermark;
+        ctx.emit.capacity = code_arena->limit - code_arena->avail;
         ctx.emit.data = tb_arena_alloc(code_arena, ctx.emit.capacity);
 
         // allocate more stuff now that we've run stats on the IR
@@ -493,7 +502,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     }
 
     // trim code arena (it fits in a single chunk so just arena free the top)
-    code_arena->watermark = (char*) &ctx.emit.data[ctx.emit.count];
+    code_arena->avail = (char*) &ctx.emit.data[ctx.emit.count];
     tb_arena_realign(code_arena);
 
     // TODO(NeGate): move the assembly output to code arena
@@ -532,6 +541,8 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     // cleanup memory
     tb_free_cfg(&cfg);
 
+    log_debug("%s: peak  ir_arena=%.1f KiB", f->super.name, tb_arena_peak_size(f->arena) / 1024.0f);
+    log_debug("%s: peak tmp_arena=%.1f KiB", f->super.name, tb_arena_peak_size(arena) / 1024.0f);
     log_debug("%s: code_arena=%.1f KiB", f->super.name, tb_arena_current_size(code_arena) / 1024.0f);
     tb_arena_restore(arena, sp);
     f->scheduled = NULL;
