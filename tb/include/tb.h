@@ -1495,8 +1495,6 @@ TB_API void tb_verify(TB_Function* f, TB_Arena* tmp);
 // print in SSA-CFG looking form (with BB params for the phis), if tmp is NULL it'll use the
 // function's tmp arena
 TB_API void tb_print(TB_Function* f, TB_Arena* tmp);
-// prints IR as GraphViz's DOT
-TB_API void tb_print_dot(TB_Function* f, TB_PrintCallback callback, void* user_data);
 // prints IR in a SSA format with less information than `tb_print`
 TB_API void tb_print_dumb(TB_Function* f, bool use_fancy_types);
 

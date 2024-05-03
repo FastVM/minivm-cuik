@@ -128,16 +128,18 @@ void* tb_arena_unaligned_alloc(TB_Arena* restrict arena, size_t size) {
         if (c != NULL) {
             assert(tb_arena_chunk_size(arena));
             c->avail   = c->data + size;
+#ifndef NDEBUG
             c->highest = c->avail;
+#endif
         } else {
             assert(size < chunk_size - sizeof(TB_Arena));
             c = cuik__valloc(chunk_size);
             c->next    = NULL;
             c->avail   = c->data + size;
             c->limit   = &c->data[chunk_size - sizeof(TB_Arena)];
-            #ifndef NDEBUG
+#ifndef NDEBUG
             c->highest = c->avail;
-            #endif
+#endif
 
             // append to top
             arena->top->next = c;

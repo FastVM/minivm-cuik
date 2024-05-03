@@ -4,7 +4,7 @@ typedef struct {
     TB_CFG cfg;
 } PrinterCtx;
 
-static const char* tb_node_get_name(TB_Node* n) {
+TB_API const char* tb_node_get_name(TB_Node* n) {
     switch (n->type) {
         case TB_NULL: return "FREED";
         case TB_UNREACHABLE: return "unreachable";

@@ -64,7 +64,7 @@ static const char* reg_class_name(int class) {
     }
 }
 
-static void tb__print_regmask(RegMask* mask) {
+void tb__print_regmask(RegMask* mask) {
     assert(mask->count == 1 && "TODO");
     if (mask->class == REG_CLASS_STK) {
         if (mask->mask[0] == 0) {
@@ -541,9 +541,11 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     // cleanup memory
     tb_free_cfg(&cfg);
 
+#ifndef NDEBUG
     log_debug("%s: peak  ir_arena=%.1f KiB", f->super.name, tb_arena_peak_size(f->arena) / 1024.0f);
     log_debug("%s: peak tmp_arena=%.1f KiB", f->super.name, tb_arena_peak_size(arena) / 1024.0f);
     log_debug("%s: code_arena=%.1f KiB", f->super.name, tb_arena_current_size(code_arena) / 1024.0f);
+#endif
     tb_arena_restore(arena, sp);
     f->scheduled = NULL;
 
