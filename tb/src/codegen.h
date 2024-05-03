@@ -105,6 +105,9 @@ struct VReg {
     // spill cost (sum of block_freq * uses_in_block)
     //   NaN if not computed yet
     float spill_cost;
+    // certain events make us more likely to bias spilling, mostly
+    // if we've already spilled.
+    float spill_bias;
     int hint_vreg;
 
     // only matters for chaitin
@@ -119,6 +122,8 @@ typedef int (*TmpCount)(Ctx* restrict ctx, TB_Node* n);
 
 // ins can be NULL
 typedef RegMask* (*NodeConstraint)(Ctx* restrict ctx, TB_Node* n, RegMask** ins);
+
+typedef bool (*NodeRemat)(TB_Node* n);
 
 // if we're doing 2addr ops like x86 the real operations are mutating:
 //
@@ -154,11 +159,13 @@ struct Ctx {
     TmpCount tmp_count;
     NodeConstraint constraint;
     TB_2Addr node_2addr;
+    NodeRemat remat;
 
     // target-dependent index
     int abi_index;
     int fallthrough;
 
+    int param_count;
     uint8_t prologue_length;
     uint8_t epilogue_length;
     uint8_t nop_pads;
@@ -207,7 +214,7 @@ struct Ctx {
 
 extern RegMask TB_REG_EMPTY;
 
-void tb__lsra(Ctx* restrict ctx, TB_Arena* arena);
+void tb__rogers(Ctx* restrict ctx, TB_Arena* arena);
 void tb__chaitin(Ctx* restrict ctx, TB_Arena* arena);
 
 void tb__print_regmask(RegMask* mask);
@@ -216,6 +223,7 @@ void tb__print_regmask(RegMask* mask);
 RegMask* tb__reg_mask_meet(Ctx* ctx, RegMask* a, RegMask* b);
 MachineBB* tb__insert(Ctx* ctx, TB_Function* f, TB_BasicBlock* bb, TB_Node* n);
 void tb__insert_before(Ctx* ctx, TB_Function* f, TB_Node* n, TB_Node* before_n);
+void tb__remove_node(Ctx* ctx, TB_Function* f, TB_Node* n);
 void tb__insert_after(Ctx* ctx, TB_Function* f, TB_Node* n, TB_Node* before_n);
 VReg* tb__set_node_vreg(Ctx* ctx, TB_Node* n);
 
@@ -226,12 +234,26 @@ static bool tb__reg_mask_less(Ctx* ctx, RegMask* a, RegMask* b) {
 static VReg* vreg_at(Ctx* ctx, int id)       { return id > 0 ? &ctx->vregs[id] : NULL; }
 static VReg* node_vreg(Ctx* ctx, TB_Node* n) { return n && ctx->vreg_map[n->gvn] > 0 ? &ctx->vregs[ctx->vreg_map[n->gvn]] : NULL; }
 
+static bool can_remat(Ctx* restrict ctx, TB_Node* n) {
+    switch (n->type) {
+        // these can rematerialize
+        case TB_ICONST:
+        case TB_F32CONST:
+        case TB_F64CONST:
+        case TB_MACH_COPY:
+        return true;
+
+        // user-defined rematerializing
+        default:
+        return ctx->remat(n);
+    }
+}
+
 static float get_spill_cost(Ctx* restrict ctx, VReg* vreg) {
     if (!isnan(vreg->spill_cost)) {
         return vreg->spill_cost;
-    } else if (vreg->n->type == TB_ICONST) {
-        // these can rematerialize
-        return (vreg->spill_cost = -1.0f);
+    } else if (can_remat(ctx, vreg->n)) {
+        return (vreg->spill_cost = -1.0f + vreg->spill_bias);
     }
 
     float c = 0.0f;
@@ -239,10 +261,11 @@ static float get_spill_cost(Ctx* restrict ctx, VReg* vreg) {
     // sum of (block_freq * uses_in_block)
     FOR_USERS(u, vreg->n) {
         TB_Node* un = USERN(u);
+        if (ctx->f->scheduled[un->gvn] == NULL) { continue; }
         c += ctx->f->scheduled[un->gvn]->freq;
     }
 
-    return (vreg->spill_cost = c);
+    return (vreg->spill_cost = c + vreg->spill_bias);
 }
 
 static bool reg_mask_eq(RegMask* a, RegMask* b) {

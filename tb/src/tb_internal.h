@@ -383,17 +383,10 @@ struct TB_Function {
 
     // for legacy builder
     TB_Trace trace;
-
-    TB_NodeLocation* line_loc;
-    NL_Table locations; // TB_Node* -> TB_NodeLocation*
+    TB_Node* last_loc;
 
     // Optimizer related data
     struct {
-        // we use this to verify that we're on the same thread
-        // for the entire duration of the TB_Function... we'll
-        // get rid of this limitation soon.
-        TB_ThreadInfo* pinned_thread;
-
         // how we track duplicates for GVN, it's possible to run while building the IR.
         NL_HashSet gvn_nodes;
 
@@ -626,9 +619,11 @@ typedef struct {
 #endif
 
 #ifndef NDEBUG
-#define tb_assert(condition, ...) ((condition) ? 0 : (fprintf(stderr, __FILE__ ":" STR(__LINE__) ": assertion failed: " #condition "\n  "), fprintf(stderr, __VA_ARGS__), abort(), 0))
+#define TB_ASSERT_MSG(cond, ...) ((cond) ? 0 : (fprintf(stderr, __FILE__ ":" STR(__LINE__) ": assertion failed: " #cond "\n  "), fprintf(stderr, __VA_ARGS__), __builtin_trap(), 0))
+#define TB_ASSERT(cond)          ((cond) ? 0 : (fprintf(stderr, __FILE__ ":" STR(__LINE__) ": assertion failed: " #cond "\n  "), __builtin_trap(), 0))
 #else
-#define tb_assert(condition, ...) (0)
+#define TB_ASSERT_MSG(cond, ...) (0)
+#define TB_ASSERT(cond) (0)
 #endif
 
 #if defined(_WIN32) && !defined(__GNUC__)
@@ -704,6 +699,10 @@ inline static bool tb_is_power_of_two(uint64_t x) {
 #define TB_LIKELY(x)   __builtin_expect(!!(x), 1)
 #define TB_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #endif
+
+// for more consistent hashing than a pointer
+uint32_t tb__node_hash(void* a);
+bool tb__node_cmp(void* a, void* b);
 
 TB_Node* tb_alloc_node_dyn(TB_Function* f, int type, TB_DataType dt, int input_count, int input_cap, size_t extra);
 TB_Node* tb_alloc_node(TB_Function* f, int type, TB_DataType dt, int input_count, size_t extra);

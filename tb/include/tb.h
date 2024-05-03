@@ -33,7 +33,7 @@
 #define TB_VERSION_MINOR 4
 #define TB_VERSION_PATCH 0
 
-#define TB_PACKED_USERS 0
+#define TB_PACKED_USERS 1
 
 #ifndef TB_API
 #  ifdef __cplusplus
@@ -145,8 +145,8 @@ typedef enum TB_FeatureSet_Generic {
 } TB_FeatureSet_Generic;
 
 typedef struct TB_FeatureSet {
-    TB_FeatureSet_Generic gen;
-    TB_FeatureSet_X64     x64;
+    uint32_t gen; // TB_FeatureSet_Generic
+    uint32_t x64; // TB_FeatureSet_X64
 } TB_FeatureSet;
 
 typedef enum TB_Linkage {
@@ -316,6 +316,9 @@ typedef enum TB_NodeTypeEnum {
     TB_SYSCALL,        // (Control, Memory, Ptr, Data...) -> (Control, Memory, Data)
     //   performs call while recycling the stack frame somewhat
     TB_TAILCALL,       // (Control, Memory, RPC, Data, Data...) -> ()
+    //   this is a safepoint used for traditional C debugging, each of these nodes
+    //   annotates a debug line location.
+    TB_DEBUG_LOCATION, // (Control, Memory) -> (Control, Memory)
     //   safepoint polls are the same except they only trigger if the poll site
     //   says to (platform specific but almost always just the page being made
     //   unmapped/guard), 3rd argument is the poll site.
@@ -333,7 +336,7 @@ typedef enum TB_NodeTypeEnum {
     //   they don't alias there's no ordering guarentee.
     TB_MERGEMEM,    // (Split, Memory...) -> Memory
     //   LOAD and STORE are standard memory accesses, they can be folded away.
-    TB_LOAD,        // (Control?, Memory, Ptr)       -> Data
+    TB_LOAD,        // (Control?, Memory, Ptr)      -> Data
     TB_STORE,       // (Control, Memory, Ptr, Data) -> Memory
     //   bulk memory ops.
     TB_MEMCPY,      // (Control, Memory, Ptr, Ptr, Size)  -> Memory
@@ -378,7 +381,7 @@ typedef enum TB_NodeTypeEnum {
     TB_ZERO_EXT,
     TB_UINT2FLOAT,
     TB_FLOAT2UINT,
-    TB_TAG_INT2FLOAT,
+    TB_INT2FLOAT,
     TB_FLOAT2INT,
     TB_BITCAST,
 
@@ -393,6 +396,7 @@ typedef enum TB_NodeTypeEnum {
 
     // Unary operations
     TB_NEG,
+    TB_FNEG,
 
     // Integer arithmatic
     TB_AND,
@@ -564,12 +568,6 @@ typedef struct TB_Symbol {
     // after this point it's tag-specific storage
 } TB_Symbol;
 
-// associated to nodes for debug locations
-typedef struct {
-    TB_SourceFile* file;
-    int line, column;
-} TB_NodeLocation;
-
 typedef struct TB_Node TB_Node;
 
 typedef struct {
@@ -653,6 +651,11 @@ typedef struct { // any integer binary operator
 typedef struct {
     TB_CharUnits align;
 } TB_NodeMemAccess;
+
+typedef struct { // TB_DEBUG_LOCATION
+    TB_SourceFile* file;
+    int line, column;
+} TB_NodeDbgLoc;
 
 typedef struct {
     int level;
@@ -816,8 +819,6 @@ typedef struct {
 
 #endif
 
-typedef void (*TB_PrintCallback)(void* user_data, const char* fmt, ...);
-
 // defined in common/arena.h
 typedef struct TB_Arena TB_Arena;
 
@@ -845,6 +846,7 @@ TB_API void tb_module_destroy(TB_Module* m);
 // dont and the tls_index is used, it'll crash
 TB_API void tb_module_set_tls_index(TB_Module* m, ptrdiff_t len, const char* name);
 
+// not thread-safe
 TB_API TB_ModuleSectionHandle tb_module_create_section(TB_Module* m, ptrdiff_t len, const char* name, TB_ModuleSectionFlags flags, TB_ComdatType comdat);
 
 typedef struct {
@@ -1057,7 +1059,7 @@ TB_API TB_FunctionPrototype* tb_prototype_create(TB_Module* m, TB_CallingConv cc
 // into the correct ABI and exposing sane looking nodes to the parameters.
 //
 // returns the parameters
-TB_API TB_Node** tb_function_set_prototype_from_dbg(TB_Function* f, TB_ModuleSectionHandle section, TB_DebugType* dbg, TB_Arena* arena, size_t* out_param_count);
+TB_API TB_Node** tb_function_set_prototype_from_dbg(TB_Function* f, TB_ModuleSectionHandle section, TB_DebugType* dbg, size_t* out_param_count);
 TB_API TB_FunctionPrototype* tb_prototype_from_dbg(TB_Module* m, TB_DebugType* dbg);
 
 // used for ABI parameter passing
@@ -1160,8 +1162,11 @@ TB_API void tb_symbol_set_name(TB_Symbol* s, ptrdiff_t len, const char* name);
 TB_API void tb_symbol_bind_ptr(TB_Symbol* s, void* ptr);
 TB_API const char* tb_symbol_get_name(TB_Symbol* s);
 
+// functions have two arenas for the majority of their allocations.
+TB_API void tb_function_set_arenas(TB_Function* f, TB_Arena* a1, TB_Arena* a2);
+
 // if arena is NULL, defaults to module arena which is freed on tb_free_thread_resources
-TB_API void tb_function_set_prototype(TB_Function* f, TB_ModuleSectionHandle section, TB_FunctionPrototype* p, TB_Arena* arena);
+TB_API void tb_function_set_prototype(TB_Function* f, TB_ModuleSectionHandle section, TB_FunctionPrototype* p);
 TB_API TB_FunctionPrototype* tb_function_get_prototype(TB_Function* f);
 
 // if len is -1, it's null terminated
@@ -1480,13 +1485,15 @@ TB_API TB_Node* tb_opt_gvn_node(TB_Function* f, TB_Node* n);
 // returns isomorphic node that's run it's peepholes.
 TB_API TB_Node* tb_opt_peep_node(TB_Function* f, TB_Node* n);
 
-// Trust me bro, just use my configs
-TB_API void tb_opt(TB_Function* f, TB_Worklist* ws, TB_Arena* ir, TB_Arena* tmp, bool preserve_types);
+// Uses the two function arenas pretty heavily, may even flip their purposes (as a form
+// of GC compacting)
+TB_API void tb_opt(TB_Function* f, TB_Worklist* ws, bool preserve_types);
 
 // Asserts on all kinds of broken behavior, dumps to stderr (i will change that later)
 TB_API void tb_verify(TB_Function* f, TB_Arena* tmp);
 
-// print in SSA-CFG looking form (with BB params for the phis)
+// print in SSA-CFG looking form (with BB params for the phis), if tmp is NULL it'll use the
+// function's tmp arena
 TB_API void tb_print(TB_Function* f, TB_Arena* tmp);
 // prints IR as GraphViz's DOT
 TB_API void tb_print_dot(TB_Function* f, TB_PrintCallback callback, void* user_data);
@@ -1536,7 +1543,9 @@ TB_API void *tb_gcc_function_ptr(TB_GCCJIT_Function *func);
 //   output goes at the top of the code_arena, feel free to place multiple functions
 //   into the same code arena (although arenas aren't thread-safe you'll want one per thread
 //   at least)
-TB_API TB_FunctionOutput* tb_codegen(TB_Function* f, TB_Worklist* ws, TB_Arena* ir, TB_Arena* tmp, TB_Arena* code_arena, const TB_FeatureSet* features, bool emit_asm);
+//
+//   if code_arena is NULL, the IR arena will be used.
+TB_API TB_FunctionOutput* tb_codegen(TB_Function* f, TB_Worklist* ws, TB_Arena* code_arena, const TB_FeatureSet* features, bool emit_asm);
 
 // interprocedural optimizer iter
 TB_API bool tb_module_ipo(TB_Module* m);
