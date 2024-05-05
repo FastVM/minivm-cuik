@@ -36,7 +36,8 @@ struct DomTree {
 };
 
 typedef struct Ctx {
-    TB_Passes* p;
+    TB_Worklist worklist;
+
     TB_CGEmitter emit;
 
     TB_Module* module;
@@ -73,7 +74,7 @@ static void emit_uint(Ctx* ctx, uint64_t x) {
 }
 
 WasmElem* new_elem(int tag, TB_Node* body) {
-    WasmElem* e = tb_arena_alloc(tmp_arena, sizeof(WasmElem));
+    WasmElem* e = tb_platform_heap_alloc(sizeof(WasmElem));
     *e = (WasmElem){ .tag = tag, .body = body };
     return e;
 }
@@ -87,10 +88,11 @@ static uint8_t get_wasm_type(TB_DataType dt) {
             if (dt.data <= 64) return 0x7E;
             break;
         }
-        case TB_FLOAT: {
-            if (dt.data == TB_FLT_32) return 0x7D;
-            if (dt.data == TB_FLT_64) return 0x7C;
-            break;
+        case TB_TAG_F32: {
+            return 0x7D;
+        }
+        case TB_TAG_F64: {
+            return 0x7C;
         }
         case TB_TAG_PTR: return 0x7F;
     }
@@ -133,8 +135,8 @@ static void push_val(Ctx* ctx, TB_Node* n) {
 }
 
 static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
-    TB_BasicBlock* bb = ctx->p->scheduled[bb_start->gvn];
-    TB_Worklist* ws = &ctx->p->worklist;
+    TB_BasicBlock* bb = ctx->f->scheduled[bb_start->gvn];
+    TB_Worklist* ws = &ctx->worklist;
 
     #ifndef NDEBUG
     TB_BasicBlock* expected = &nl_map_get_checked(ctx->cfg.node_to_block, bb_start);
@@ -142,7 +144,7 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
     #endif
 
     dyn_array_clear(ctx->phi_vals);
-    greedy_scheduler(ctx->p, &ctx->cfg, ws, &ctx->phi_vals, bb);
+    tb_greedy_scheduler(ctx->f, &ctx->cfg, ws, &ctx->phi_vals, bb);
 
     FOR_N(i, ctx->cfg.block_count, dyn_array_length(ws->items)) {
         TB_Node* bot = ws->items[i];
@@ -186,12 +188,8 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
             push_val(ctx, bot->inputs[1]);
             break;
 
-            case TB_ARRAY_ACCESS:
+            case TB_PTR_OFFSET:
             push_val(ctx, bot->inputs[2]);
-            push_val(ctx, bot->inputs[1]);
-            break;
-
-            case TB_MEMBER_ACCESS:
             push_val(ctx, bot->inputs[1]);
             break;
 
@@ -283,8 +281,8 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
                 case TB_FDIV:
                 case TB_FMIN:
                 case TB_FMAX: {
-                    assert(n->dt.type == TB_FLOAT);
-                    int base = n->dt.data == TB_FLT_64 ? 0xA0 : 0x92;
+                    assert(n->dt.type == TB_TAG_F64 || n->dt.type == TB_TAG_F32);
+                    int base = n->type == TB_TAG_F64 ? 0xA0 : 0x92;
                     EMIT1(&ctx->emit, base + (n->type - TB_FADD));
                     break;
                 }
@@ -310,8 +308,8 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
                         else tb_todo();
                     } else {
                         if (0) {}
-                        else if (n->dt.data == TB_FLT_32) { EMIT1(&ctx->emit, 0x2A); } // f32.load
-                        else if (n->dt.data == TB_FLT_64) { EMIT1(&ctx->emit, 0x2B); } // f64.load
+                        else if (n->dt.data == TB_TAG_F32) { EMIT1(&ctx->emit, 0x2A); } // f32.load
+                        else if (n->dt.data == TB_TAG_F64) { EMIT1(&ctx->emit, 0x2B); } // f64.load
                         else tb_todo();
                     }
 
@@ -333,8 +331,8 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
                         else tb_todo();
                     } else {
                         if (0) {}
-                        else if (dt.data == TB_FLT_32) { EMIT1(&ctx->emit, 0x38); } // f32.store
-                        else if (dt.data == TB_FLT_64) { EMIT1(&ctx->emit, 0x39); } // f64.store
+                        else if (dt.data == TB_TAG_F32) { EMIT1(&ctx->emit, 0x38); } // f32.store
+                        else if (dt.data == TB_TAG_F64) { EMIT1(&ctx->emit, 0x39); } // f64.store
                         else tb_todo();
                     }
 
@@ -344,29 +342,12 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
                     break;
                 }
 
-                case TB_MEMBER_ACCESS: {
-                    int32_t offset = TB_NODE_GET_EXTRA_T(n, TB_NodeMember)->offset;
-
-                    // i32.const stride
-                    EMIT1(&ctx->emit, 0x41);
-                    emit_uint(ctx, offset);
+                case TB_PTR_OFFSET: {
                     // i32.add
                     EMIT1(&ctx->emit, 0x6A);
                     break;
                 }
 
-                case TB_ARRAY_ACCESS: {
-                    int32_t stride = TB_NODE_GET_EXTRA_T(n, TB_NodeArray)->stride;
-
-                    // i32.const stride
-                    EMIT1(&ctx->emit, 0x41);
-                    emit_uint(ctx, stride);
-                    // i32.mul
-                    EMIT1(&ctx->emit, 0x6C);
-                    // i32.add
-                    EMIT1(&ctx->emit, 0x6A);
-                    break;
-                }
 
                 case TB_CALL: {
                     assert(n->inputs[2]->type == TB_SYMBOL);
@@ -409,7 +390,7 @@ static void compile_bb(Ctx* ctx, TB_Node* bb_start, int depth) {
             }
         }
 
-        if (bot->dt.type == TB_TAG_INT || bot->dt.type == TB_TAG_PTR || bot->dt.type == TB_FLOAT) {
+        if (bot->dt.type == TB_TAG_INT || bot->dt.type == TB_TAG_PTR || bot->dt.type == TB_TAG_F64 || bot->dt.type == TB_TAG_F32) {
             int dst = spill_tos(ctx, bot);
             EMIT1(&ctx->emit, 0x21);
             emit_uint(ctx, dst);
@@ -448,9 +429,9 @@ static TB_Node** successors(Ctx* ctx, TB_Worklist* ws, TB_Node* end, size_t* out
 
     if (end->type == TB_BRANCH) {
         FOR_USERS(u, end) {
-            if (u->n->type == TB_PROJ) {
-                TB_Node* succ = cfg_next_bb_after_cproj(u->n);
-                int index = TB_NODE_GET_EXTRA_T(u->n, TB_NodeProj)->index;
+            if (USERN(u)->type == TB_PROJ) {
+                TB_Node* succ = cfg_next_bb_after_cproj(USERN(u));
+                int index = TB_NODE_GET_EXTRA_T(USERN(u), TB_NodeProj)->index;
                 succ_blocks[index] = succ;
             }
         }
@@ -482,7 +463,7 @@ static bool has_merge_root(Ctx* ctx, TB_Node* n, int id) {
 
     FOR_N(i, 0, n->input_count) {
         TB_Node* pred = cfg_get_pred(&ctx->cfg, n, i);
-        TB_BasicBlock* pred_bb = ctx->p->scheduled[pred->gvn];
+        TB_BasicBlock* pred_bb = ctx->f->scheduled[pred->gvn];
 
         if (pred_bb->id >= id) {
             return false;
@@ -495,7 +476,7 @@ static bool has_merge_root(Ctx* ctx, TB_Node* n, int id) {
 static WasmElem* do_dom_tree(Ctx* ctx, DomTree* node);
 
 static WasmElem* do_branch(Ctx* ctx, DomTree* src, TB_Node* bb_start) {
-    TB_BasicBlock* bb = ctx->p->scheduled[bb_start->gvn];
+    TB_BasicBlock* bb = ctx->f->scheduled[bb_start->gvn];
     DomTree* dst = &ctx->doms[bb->id];
 
     if (dst->id < src->id || has_merge_root(ctx, bb_start, dst->id)) {
@@ -519,7 +500,7 @@ static WasmElem* do_dom_tree(Ctx* ctx, DomTree* node) {
     WasmElem* last = NULL;
     FOR_N(i, 0, dyn_array_length(node->kids)) {
         TB_Node* start = node->kids[i]->start;
-        TB_BasicBlock* start_bb = ctx->p->scheduled[start->gvn];
+        TB_BasicBlock* start_bb = ctx->f->scheduled[start->gvn];
 
         DomTree* kid = node->kids[i];
         if (has_merge_root(ctx, start, start_bb->id)) {
@@ -530,7 +511,7 @@ static WasmElem* do_dom_tree(Ctx* ctx, DomTree* node) {
                 new_e->_then = last;
                 last = kid->elem = new_e;
             } else {
-                __debugbreak();
+                // __debugbreak();
                 last = kid->elem;
             }
         }
@@ -538,7 +519,8 @@ static WasmElem* do_dom_tree(Ctx* ctx, DomTree* node) {
 
     // exit path of node
     size_t succ_count;
-    TB_Node** succ_blocks = successors(ctx, &ctx->p->worklist, node->end, &succ_count);
+    TB_Node** succ_blocks = successors(ctx, &ctx->worklist, node->end, &succ_count);
+    printf("succ_count = %zu\n", succ_count);
     if (succ_count == 1) {
         e->_then = do_branch(ctx, node, succ_blocks[0]);
     } else if (succ_count == 2) {
@@ -669,19 +651,19 @@ static int dom_sort_cmp(const void* a, const void* b) {
     return aa[0]->id - bb[0]->id;
 }
 
-static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict func_out, const TB_FeatureSet* features, TB_Arena* code_arena, bool emit_asm) {
-    verify_tmp_arena(p);
+static int node_latency(TB_Function* f, TB_Node* n, TB_Node* end) {
+    return 1;
+}
 
-    TB_Arena* arena = tmp_arena;
+static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restrict func_out, const TB_FeatureSet* features, TB_Arena* code_arena, bool emit_asm) {
+    TB_Arena* arena = tb_arena_create(1 << 16);
     TB_ArenaSavepoint sp = tb_arena_save(arena);
 
-    TB_Function* restrict f = p->f;
     TB_OPTDEBUG(CODEGEN)(tb_pass_print(p));
 
     Ctx ctx = {
         .module = f->super.module,
         .f = f,
-        .p = p,
         .emit = {
             .output = func_out,
             .arena = arena,
@@ -690,7 +672,7 @@ static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict 
     };
 
     // allocate entire top of the code arena (we'll trim it later if possible)
-    ctx.emit.capacity = code_arena->high_point - code_arena->watermark;
+    ctx.emit.capacity = code_arena->avail - code_arena->limit;
     ctx.emit.data = tb_arena_alloc(code_arena, ctx.emit.capacity);
     ctx.local_desc = dyn_array_create(uint8_t, 32);
 
@@ -703,13 +685,13 @@ static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict 
         ctx.locals[i].id = -1;
     }
 
-    FOR_USERS(u, f->root_node) if (u->n->type == TB_PROJ) {
-        int i = TB_NODE_GET_EXTRA_T(u->n, TB_NodeProj)->index;
+    FOR_USERS(u, f->root_node) if (USERN(u)->type == TB_PROJ) {
+        int i = TB_NODE_GET_EXTRA_T(USERN(u), TB_NodeProj)->index;
         if (i >= 3) {
             // params fit into the first few locals
-            ctx.locals[u->n->gvn].id = i - 3;
-            ctx.locals[u->n->gvn].uses = use_count(u->n);
-            dyn_array_put(ctx.local_desc, get_wasm_type(u->n->dt));
+            ctx.locals[USERN(u)->gvn].id = i - 3;
+            ctx.locals[USERN(u)->gvn].uses = use_count(USERN(u));
+            dyn_array_put(ctx.local_desc, get_wasm_type(USERN(u)->dt));
         }
     }
 
@@ -719,23 +701,21 @@ static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict 
         ctx.features = *features;
     }
 
-    TB_Worklist* restrict ws = &p->worklist;
+    TB_Worklist* restrict ws = &ctx.worklist;
 
     // legalize step takes out any of our 16bit and 8bit math ops
-    tb_pass_prep(p);
-    tb_pass_legalize(p, f->super.module->target_arch);
+    tb_opt_legalize(f, f->super.module->target_arch);
 
     worklist_clear(ws);
 
     CUIK_TIMED_BLOCK("global sched") {
-        // We need to generate a CFG
-        ctx.cfg = tb_compute_rpo(f, p);
+        ctx.cfg = tb_compute_rpo(f, ws);
         ctx.block_count = dyn_array_length(ws->items);
-        // And perform global scheduling
-        tb_pass_schedule(p, ctx.cfg, false, false);
+
+        tb_global_schedule(f, ws, ctx.cfg, true, true, node_latency);
     }
 
-    DomTree* doms = ctx.doms = tb_arena_alloc(tmp_arena, ctx.cfg.block_count * sizeof(DomTree));
+    DomTree* doms = ctx.doms = tb_arena_alloc(arena, ctx.cfg.block_count * sizeof(DomTree));
     FOR_N(i, 0, ctx.cfg.block_count) {
         doms[i].id    = i;
         doms[i].elem  = NULL;
@@ -745,7 +725,7 @@ static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict 
     }
 
     FOR_N(i, 0, ctx.cfg.block_count) {
-        TB_BasicBlock* bb = ctx.p->scheduled[ws->items[i]->gvn];
+        TB_BasicBlock* bb = ctx.f->scheduled[ws->items[i]->gvn];
         doms[i].start = ws->items[i];
         doms[i].end   = bb->end;
 
@@ -775,17 +755,17 @@ static void compile_function(TB_Passes* restrict p, TB_FunctionOutput* restrict 
     patch_uint(&ctx.emit.data[4], 0);
 
     // trim code arena (it fits in a single chunk so just arena free the top)
-    code_arena->watermark = (char*) &ctx.emit.data[ctx.emit.count];
+    code_arena->avail = (char*) &ctx.emit.data[ctx.emit.count];
     tb_arena_realign(code_arena);
 
     // TODO(NeGate): move the assembly output to code arena
     if (emit_asm) CUIK_TIMED_BLOCK("dissassembly") {
-        __debugbreak();
+        // __debugbreak();
     }
 
     log_debug("%s: code_arena=%.1f KiB", f->super.name, tb_arena_current_size(code_arena) / 1024.0f);
     tb_arena_restore(arena, sp);
-    p->scheduled = NULL;
+    f->scheduled = NULL;
 
     // we're done, clean up
     func_out->asm_out = ctx.emit.head_asm;
@@ -835,10 +815,11 @@ static void get_data_type_size(TB_DataType dt, size_t* out_size, size_t* out_ali
             *out_align = is_big_int ? 8 : ((dt.data + 7) / 8);
             break;
         }
-        case TB_FLOAT: {
+        case TB_TAG_F32:
+        case TB_TAG_F64: {
             int s = 0;
-            if (dt.data == TB_FLT_32) s = 4;
-            else if (dt.data == TB_FLT_64) s = 8;
+            if (dt.type == TB_TAG_F32) s = 4;
+            else if (dt.type == TB_TAG_F64) s = 8;
             else tb_unreachable();
 
             *out_size = s;

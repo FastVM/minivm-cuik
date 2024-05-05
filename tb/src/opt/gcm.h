@@ -454,7 +454,7 @@ void tb_global_schedule(TB_Function* f, TB_Worklist* ws, TB_CFG cfg, bool loop_n
         }
 
         TB_BasicBlock* start_bb   = &nl_map_get_checked(cfg.node_to_block, rpo_nodes[0]);
-        ArenaArray(TB_Node*) pins = aarray_create(tmp_arena, TB_Node*, (f->node_count / 32) + 16);
+        DynArray(TB_Node*) pins = dyn_array_create(TB_Node*, (f->node_count / 32) + 16);
 
         CUIK_TIMED_BLOCK("pinned schedule") {
             // BFS walk all the nodes
@@ -485,7 +485,7 @@ void tb_global_schedule(TB_Function* f, TB_Worklist* ws, TB_CFG cfg, bool loop_n
                     if (bb) {
                         nl_hashset_put2(&bb->items, n, tb__node_hash, tb__node_cmp);
                         f->scheduled[n->gvn] = bb;
-                        aarray_push(pins, n);
+                        dyn_array_put(pins, n);
 
                         DO_IF(TB_OPTDEBUG_GCM)(printf("%s: %%%u pinned to .bb%d\n", f->super.name, n->gvn, bb->id));
                     }
@@ -503,7 +503,7 @@ void tb_global_schedule(TB_Function* f, TB_Worklist* ws, TB_CFG cfg, bool loop_n
             worklist_clear_visited(ws);
             dyn_array_set_length(ws->items, 0);
 
-            aarray_for(i, pins) {
+            dyn_array_for(i, pins) {
                 TB_Node* pin_n = pins[i];
 
                 TB_ArenaSavepoint sp = tb_arena_save(tmp_arena);

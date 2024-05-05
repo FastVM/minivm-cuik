@@ -33,7 +33,7 @@
 #define TB_VERSION_MINOR 4
 #define TB_VERSION_PATCH 0
 
-#define TB_PACKED_USERS 1
+#define TB_PACKED_USERS 0
 
 #ifndef TB_API
 #  ifdef __cplusplus

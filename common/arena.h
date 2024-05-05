@@ -40,6 +40,10 @@ struct TB_Arena {
     #ifndef NDEBUG
     char* highest;
     char* _pad;
+    #ifdef __wasm__
+    char *_pad2;
+    char *_pad3;
+    #endif
     #endif
 
     char data[];
