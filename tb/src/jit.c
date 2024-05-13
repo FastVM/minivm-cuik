@@ -376,7 +376,7 @@ void* tb_jit_get_code_ptr(TB_Function* f) {
 ////////////////////////////////
 // Debugger
 ////////////////////////////////
-#if defined(CUIK__IS_X64) && defined(_WIN32)
+#if defined(CUIK__IS_X64) && defined(_WIN32) && 0
 struct TB_CPUContext {
     // used for stack crawling
     void* pc;
@@ -607,4 +607,3 @@ bool tb_jit_thread_call(TB_CPUContext* cpu, void* pc, uint64_t* ret, size_t arg_
 }
 #endif
 #endif
-
