@@ -40,10 +40,6 @@ struct TB_Arena {
     #ifndef NDEBUG
     char* highest;
     char* _pad;
-    #ifdef __wasm__
-    char *_pad2;
-    char *_pad3;
-    #endif
     #endif
 
     char data[];
@@ -65,7 +61,7 @@ TB_API void tb_arena_destroy(TB_Arena* restrict arena);
 TB_API void* tb_arena_unaligned_alloc(TB_Arena* restrict arena, size_t size);
 TB_API void* tb_arena_alloc(TB_Arena* restrict arena, size_t size);
 
-TB_API void* tb_arena_realloc(TB_Arena* restrict arena, void* old, size_t size);
+TB_API void* tb_arena_realloc(TB_Arena* restrict arena, void* old, size_t old_size, size_t size);
 
 // return false on failure
 TB_API bool tb_arena_free(TB_Arena* restrict arena, void* ptr, size_t size);

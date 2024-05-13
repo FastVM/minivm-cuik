@@ -1548,9 +1548,6 @@ TB_API TB_FunctionOutput* tb_codegen(TB_Function* f, TB_Worklist* ws, TB_Arena* 
 // interprocedural optimizer iter
 TB_API bool tb_module_ipo(TB_Module* m);
 
-// the user_data is expected to be a valid FILE*
-TB_API void tb_default_print_callback(void* user_data, const char* fmt, ...);
-
 ////////////////////////////////
 // IR access
 ////////////////////////////////

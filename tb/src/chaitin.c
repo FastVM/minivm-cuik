@@ -406,7 +406,7 @@ static void build_ifg(Ctx* restrict ctx, TB_Arena* arena, Chaitin* ra) {
 
 static void chaitin_print_vreg(Ctx* restrict ctx, Chaitin* restrict ra, VReg* vreg) {
     float cost = get_spill_cost(ctx, vreg);
-    printf("# V%-4lld deg=%d cost=%.2f ", vreg - ctx->vregs, ra->degree[vreg - ctx->vregs], cost);
+    printf("# V%-4"PRIdPTR" deg=%d cost=%.2f ", vreg - ctx->vregs, ra->degree[vreg - ctx->vregs], cost);
     tb__print_regmask(vreg->mask);
     if (vreg->coalesced > 0) {
         printf(" (%d DEFS)", vreg->coalesced + 1);
@@ -772,7 +772,7 @@ void tb__chaitin(Ctx* restrict ctx, TB_Arena* arena) {
             // rematerialization candidates will delete the original def and for now, they'll
             // reload per use site (although we might wanna coalesce some later on).
             if (n->type == TB_ICONST || n->type == TB_F32CONST || n->type == TB_F64CONST) {
-                rematerialize(ctx, n);
+                rematerialize(ctx, NULL, n);
             } else {
                 ctx->vregs[vreg_id].mask = ctx->constraint(ctx, n, NULL);
                 ctx->vregs[vreg_id].spill_cost = NAN;

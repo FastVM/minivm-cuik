@@ -55,67 +55,12 @@ static uint64_t node_unit_mask(TB_Function* f, TB_Node* n);
 static void init_ctx(Ctx* restrict ctx, TB_ABI abi);
 static void disassemble(TB_CGEmitter* e, Disasm* restrict d, int bb, size_t pos, size_t end);
 
-static const char* reg_class_name(int class) {
-    switch (class) {
-        case 0: return "STK";
-        case 1: return "GPR";
-        case 2: return "XMM";
-        default: return NULL;
-    }
-}
-
-void tb__print_regmask(RegMask* mask) {
-    assert(mask->count == 1 && "TODO");
-    if (mask->class == REG_CLASS_STK) {
-        if (mask->mask[0] == 0) {
-            printf("[any spill]");
-        } else if (mask->mask[0] >= STACK_BASE_REG_NAMES) {
-            printf("[SPILL%"PRId64"]", mask->mask[0] - STACK_BASE_REG_NAMES);
-        } else {
-            printf("[STK%"PRId64"]", mask->mask[0]);
-        }
-    } else if (mask->mask[0] == 0) {
-        printf("[SPILL]");
-    } else {
-        int i = 0;
-        bool comma = false;
-        uint64_t bits = mask->mask[0];
-
-        printf("[%s:", reg_class_name(mask->class));
-        while (bits) {
-            // skip zeros
-            int skip = __builtin_ffs(bits) - 1;
-            i += skip, bits >>= skip;
-
-            if (!comma) {
-                comma = true;
-            } else {
-                printf(", ");
-            }
-
-            // find sequence of ones
-            int len = __builtin_ffs(~bits) - 1;
-            printf("R%d", i);
-            if (len > 1) {
-                printf(" .. R%d", i+len-1);
-            }
-
-            // skip ones
-            bits >>= len, i += len;
-        }
-
-        if (mask->may_spill) {
-            printf(" | SPILL");
-        }
-        printf("]");
-    }
-}
-
 static void log_phase_end(TB_Function* f, size_t og_size, const char* label) {
     log_debug("%s: tmp_arena=%.1f KiB, ir_arena=%.1f KiB (post %s)", f->super.name, tb_arena_current_size(f->tmp_arena) / 1024.0f, (tb_arena_current_size(f->arena) - og_size) / 1024.0f, label);
 }
 
 static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restrict func_out, const TB_FeatureSet* features, TB_Arena* code_arena, bool emit_asm) {
+    cuikperf_region_start("compile", f->super.name);
     TB_OPTDEBUG(CODEGEN)(tb_print_dumb(f, false));
 
     TB_Arena* arena = f->tmp_arena;
@@ -159,28 +104,58 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     CUIK_TIMED_BLOCK("isel") {
         log_debug("%s: tmp_arena=%.1f KiB (pre-isel)", f->super.name, tb_arena_current_size(arena) / 1024.0f);
 
-        TB_Worklist walker_ws = { 0 };
-        worklist_alloc(&walker_ws, f->node_count);
-        worklist_clear(ws);
-
         // pointer math around stack slots will refer to this
         ctx.frame_ptr = tb_alloc_node(f, TB_MACH_FRAME_PTR, TB_TYPE_PTR, 1, 0);
         set_input(f, ctx.frame_ptr, f->root_node, 0);
         ctx.frame_ptr = tb_opt_gvn_node(f, ctx.frame_ptr);
-        ctx.walker_ws = &walker_ws;
 
-        // bottom-up rewrite:
-        //   we keep the visited bits set once we've rewritten a node, unlike most worklist usage
-        //   which unsets a bit once it's popped from the items array.
-        CUIK_TIMED_BLOCK("rewriting") {
-            worklist_push(&walker_ws, f->root_node);
+        TB_ArenaSavepoint pins_sp = tb_arena_save(arena);
+        ArenaArray(TB_Node*) pins = aarray_create(arena, TB_Node*, (f->node_count / 32) + 16);
+
+        TB_Worklist walker_ws = { 0 };
+        worklist_alloc(&walker_ws, f->node_count);
+
+        // find all nodes
+        worklist_clear(ws);
+        worklist_push(ws, f->root_node);
+        for (size_t i = 0; i < dyn_array_length(ws->items); i++) {
+            TB_Node* n = ws->items[i];
+            if (is_pinned(n) && !is_proj(n)) {
+                aarray_push(pins, n);
+            }
+
+            FOR_USERS(u, n) { worklist_push(ws, USERN(u)); }
+        }
+
+        // greedy instruction selector does bottom-up rewrites from the pinned nodes
+        worklist_clear(ws);
+        aarray_for(i, pins) {
+            TB_Node* pin_n = pins[i];
+
+            TB_OPTDEBUG(ISEL)(printf("PIN    t=%d? ", ++f->stats.time), tb_print_dumb_node(NULL, pin_n), printf("\n"));
+            worklist_push(&walker_ws, pin_n);
+
             while (dyn_array_length(walker_ws.items) > 0) {
                 TB_Node* n = dyn_array_pop(walker_ws.items);
-                tb__gvn_remove(f, n);
+                TB_OPTDEBUG(ISEL)(printf("  ISEL t=%d? ", ++f->stats.time), tb_print_dumb_node(NULL, n));
 
-                TB_OPTDEBUG(ISEL)(printf("ISEL t=%d? ", ++f->stats.time), tb_print_dumb_node(NULL, n));
+                if (!is_proj(n) && n->user_count == 0) {
+                    TB_OPTDEBUG(ISEL)(printf(" => \x1b[31mKILL\x1b[0m\n"));
+                    worklist_push(ws, n);
+                    continue;
+                }
+
+                // memory out nodes are "notorious" for having unused loads, we wanna pruned these
+                if (n->dt.type == TB_TAG_MEMORY) {
+                    FOR_USERS(u, n) {
+                        if (USERN(u)->user_count == 0) {
+                            worklist_push(ws, USERN(u));
+                        }
+                    }
+                }
 
                 // replace with machine op
+                tb__gvn_remove(f, n);
                 TB_Node* k = node_isel(&ctx, f, n);
                 if (k && k != n) {
                     // we could run GVN on machine ops :)
@@ -209,20 +184,25 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
                     }
                 }
             }
-            worklist_free(&walker_ws);
         }
+        worklist_free(&walker_ws);
 
         if (ctx.frame_ptr->user_count == 0) {
             tb_kill_node(f, ctx.frame_ptr);
+            ctx.frame_ptr = NULL;
         }
 
         // dead node elim
         CUIK_TIMED_BLOCK("dead node elim") {
             for (TB_Node* n; n = worklist_pop(ws), n;) {
-                if (n->user_count == 0 && !is_proj(n)) { tb_kill_node(f, n); }
+                if (n->user_count == 0 && !is_proj(n)) {
+                    TB_OPTDEBUG(ISEL)(printf("  ISEL t=%d? ", ++f->stats.time), tb_print_dumb_node(NULL, n), printf(" => \x1b[31mKILL\x1b[0m\n"));
+                    tb_kill_node(f, n);
+                }
             }
         }
 
+        tb_arena_restore(arena, pins_sp);
         log_phase_end(f, og_size, "isel");
     }
 
@@ -243,7 +223,10 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
     int bb_count = 0;
     MachineBB* restrict machine_bbs = tb_arena_alloc(arena, cfg.block_count * sizeof(MachineBB));
-    TB_Node** bbs = ws->items;
+
+    TB_Node** rpo_nodes = ctx.rpo_nodes = tb_arena_alloc(arena, cfg.block_count * sizeof(MachineBB));
+    memcpy(rpo_nodes, ws->items, cfg.block_count * sizeof(MachineBB));
+    dyn_array_set_length(ws->items, 0);
 
     int stop_bb = -1;
     CUIK_TIMED_BLOCK("BB scheduling") {
@@ -254,7 +237,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
         // define all PHIs early and sort BB order
         FOR_N(i, 0, cfg.block_count) {
-            TB_BasicBlock* bb = &nl_map_get_checked(cfg.node_to_block, bbs[i]);
+            TB_BasicBlock* bb = &nl_map_get_checked(cfg.node_to_block, rpo_nodes[i]);
             TB_Node* end = bb->end;
             if (end->type == TB_RETURN) {
                 stop_bb = i;
@@ -265,7 +248,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
         // enter END block at the... end
         if (stop_bb >= 0) {
-            machine_bbs[bb_count++] = (MachineBB){ stop_bb, .bb = f->scheduled[bbs[stop_bb]->gvn] };
+            machine_bbs[bb_count++] = (MachineBB){ stop_bb, .bb = f->scheduled[rpo_nodes[stop_bb]->gvn] };
         }
 
         log_phase_end(f, og_size, "BB-sched");
@@ -284,31 +267,29 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
         int max_ins = 0;
         size_t vreg_count = 1; // 0 is reserved as the NULL vreg
-        assert(dyn_array_length(ws->items) == cfg.block_count);
+        assert(dyn_array_length(ws->items) == 0);
         FOR_N(i, 0, bb_count) {
             int bbid = machine_bbs[i].id;
-            TB_Node* bb_start = bbs[bbid];
+            TB_Node* bb_start = rpo_nodes[bbid];
             TB_BasicBlock* bb = f->scheduled[bb_start->gvn];
 
             bb->order = i;
             node_to_bb_put(&ctx, bb_start, &machine_bbs[i]);
 
             // compute local schedule
-            size_t base = dyn_array_length(ws->items);
-
-            // tb_greedy_scheduler(f, &cfg, ws, NULL, bb);
             CUIK_TIMED_BLOCK("local sched") {
+                // tb_greedy_scheduler(f, &cfg, ws, NULL, bb);
                 tb_list_scheduler(f, &cfg, ws, NULL, bb, node_latency, node_unit_mask, FUNCTIONAL_UNIT_COUNT);
             }
 
             // a bit of slack for spills
-            size_t item_count = dyn_array_length(ws->items) - base;
+            size_t item_count = dyn_array_length(ws->items);
             ArenaArray(TB_Node*) items = aarray_create(f->arena, TB_Node*, item_count + 16);
             aarray_set_length(items, item_count);
 
             // copy out sched
             FOR_N(i, 0, item_count) {
-                TB_Node* n = ws->items[cfg.block_count + i];
+                TB_Node* n = ws->items[i];
                 items[i] = n;
 
                 // if there's a def, let's make a vreg
@@ -342,8 +323,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
                 }
                 ctx.vreg_map[n->gvn] = vreg_id;
             }
-
-            dyn_array_set_length(ws->items, base);
+            dyn_array_clear(ws->items);
 
             machine_bbs[i].n = bb_start;
             machine_bbs[i].end_n = bb->end;
@@ -409,6 +389,8 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
     CUIK_TIMED_BLOCK("regalloc") {
         // tb__chaitin(&ctx, arena);
         tb__rogers(&ctx, arena);
+
+        worklist_clear(ws);
         nl_hashset_free(ctx.mask_intern);
 
         log_phase_end(f, og_size, "RA");
@@ -526,7 +508,7 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
         FOR_N(i, 0, bb_count) {
             int bbid = machine_bbs[i].id;
-            TB_Node* bb = bbs[bbid];
+            TB_Node* bb = rpo_nodes[bbid];
 
             uint32_t start = ctx.emit.labels[bbid] & ~0x80000000;
             uint32_t end   = ctx.emit.count;
@@ -540,12 +522,14 @@ static void compile_function(TB_Function* restrict f, TB_FunctionOutput* restric
 
     // cleanup memory
     tb_free_cfg(&cfg);
+    cuikperf_region_end();
 
-#ifndef NDEBUG
+    #ifndef NDEBUG
     log_debug("%s: peak  ir_arena=%.1f KiB", f->super.name, tb_arena_peak_size(f->arena) / 1024.0f);
     log_debug("%s: peak tmp_arena=%.1f KiB", f->super.name, tb_arena_peak_size(arena) / 1024.0f);
     log_debug("%s: code_arena=%.1f KiB", f->super.name, tb_arena_current_size(code_arena) / 1024.0f);
-#endif
+    #endif
+
     tb_arena_restore(arena, sp);
     f->scheduled = NULL;
 

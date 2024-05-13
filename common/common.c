@@ -128,18 +128,18 @@ void* tb_arena_unaligned_alloc(TB_Arena* restrict arena, size_t size) {
         if (c != NULL) {
             assert(tb_arena_chunk_size(arena));
             c->avail   = c->data + size;
-#ifndef NDEBUG
+            #ifndef NDEBUG
             c->highest = c->avail;
-#endif
+            #endif
         } else {
             assert(size < chunk_size - sizeof(TB_Arena));
             c = cuik__valloc(chunk_size);
             c->next    = NULL;
             c->avail   = c->data + size;
             c->limit   = &c->data[chunk_size - sizeof(TB_Arena)];
-#ifndef NDEBUG
+            #ifndef NDEBUG
             c->highest = c->avail;
-#endif
+            #endif
 
             // append to top
             arena->top->next = c;
@@ -150,9 +150,12 @@ void* tb_arena_unaligned_alloc(TB_Arena* restrict arena, size_t size) {
     }
 }
 
-TB_API void* tb_arena_realloc(TB_Arena* restrict arena, void* old, size_t size) {
+TB_API void* tb_arena_realloc(TB_Arena* restrict arena, void* old, size_t old_size, size_t size) {
+    old_size = (old_size + TB_ARENA_ALIGNMENT - 1) & ~(TB_ARENA_ALIGNMENT - 1);
+    size = (size + TB_ARENA_ALIGNMENT - 1) & ~(TB_ARENA_ALIGNMENT - 1);
+
     char* p = old;
-    if (p + size == arena->avail) {
+    if (p + old_size == arena->avail) {
         // try to resize
         arena->avail = old;
     }

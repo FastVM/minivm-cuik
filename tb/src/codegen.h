@@ -179,7 +179,7 @@ struct Ctx {
     // Basic blocks
     int bb_count;
     MachineBB* machine_bbs;
-    TB_Worklist* walker_ws;
+    TB_Node** rpo_nodes;
 
     // used when calling node_constraint since it needs an array, we
     // figure out the max input count of all nodes before allocating it.
@@ -217,8 +217,6 @@ extern RegMask TB_REG_EMPTY;
 void tb__rogers(Ctx* restrict ctx, TB_Arena* arena);
 void tb__chaitin(Ctx* restrict ctx, TB_Arena* arena);
 
-void tb__print_regmask(RegMask* mask);
-
 // RA helpers
 RegMask* tb__reg_mask_meet(Ctx* ctx, RegMask* a, RegMask* b);
 MachineBB* tb__insert(Ctx* ctx, TB_Function* f, TB_BasicBlock* bb, TB_Node* n);
@@ -237,6 +235,7 @@ static VReg* node_vreg(Ctx* ctx, TB_Node* n) { return n && ctx->vreg_map[n->gvn]
 static bool can_remat(Ctx* restrict ctx, TB_Node* n) {
     switch (n->type) {
         // these can rematerialize
+        case TB_POISON:
         case TB_ICONST:
         case TB_F32CONST:
         case TB_F64CONST:
@@ -266,6 +265,15 @@ static float get_spill_cost(Ctx* restrict ctx, VReg* vreg) {
     }
 
     return (vreg->spill_cost = c + vreg->spill_bias);
+}
+
+static const char* reg_class_name(int class) {
+    switch (class) {
+        case 0: return "STK";
+        case 1: return "GPR";
+        case 2: return "XMM";
+        default: return NULL;
+    }
 }
 
 static bool reg_mask_eq(RegMask* a, RegMask* b) {
