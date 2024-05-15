@@ -22,7 +22,6 @@ typedef struct {
     nl_buffer_t *globals;
     nl_buffer_t *pre;
     nl_buffer_t *buf;
-    ptrdiff_t loop_goes_to;
     int depth;
 } CFmtState;
 
@@ -375,9 +374,6 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
             }
         }
 
-        c_fmt_spaces(ctx);
-        nl_buffer_format(ctx->buf, "{\n");
-        ctx->depth += 1;
         size_t has_phi = 0;
         FOR_USERS(u, target) {
             if (USERN(u)->type == TB_PHI) {
@@ -389,45 +385,50 @@ static void c_fmt_branch_edge(CFmtState* ctx, TB_Node* n, bool fallthru) {
             }
         }
         ctx->a += has_phi;
-        size_t pos = 0;
-        FOR_USERS(u, target) {
-            if (USERN(u)->type == TB_PHI) {
-                if (USERN(u)->inputs[phi_i] != NULL) {
-                    if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
-                        assert(phi_i >= 0);
-                        if (pos != 0) {
-                            c_fmt_spaces(ctx);
-                            nl_buffer_format(ctx->buf, "%s a%zu = ", c_fmt_type_name(USERN(u)->dt), ctx->a + pos);
-                            c_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
-                            nl_buffer_format(ctx->buf, ";\n");
+        if (has_phi != 0) {
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "{\n");
+            ctx->depth += 1;
+            size_t pos = 0;
+            FOR_USERS(u, target) {
+                if (USERN(u)->type == TB_PHI) {
+                    if (USERN(u)->inputs[phi_i] != NULL) {
+                        if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
+                            assert(phi_i >= 0);
+                            if (pos != 0) {
+                                c_fmt_spaces(ctx);
+                                nl_buffer_format(ctx->buf, "%s a%zu = ", c_fmt_type_name(USERN(u)->dt), ctx->a + pos);
+                                c_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
+                                nl_buffer_format(ctx->buf, ";\n");
+                            }
+                            pos += 1;
                         }
-                        pos += 1;
                     }
                 }
             }
-        }
-        pos = 0;
-        FOR_USERS(u, target) {
-            if (USERN(u)->type == TB_PHI) {
-                if (USERN(u)->inputs[phi_i] != NULL) {
-                    if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
-                        assert(phi_i >= 0);
-                        if (pos == 0) {
-                            c_fmt_output(ctx, USERN(u));
-                            c_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
-                            nl_buffer_format(ctx->buf, ";\n");
-                        } else {
-                            c_fmt_output(ctx, USERN(u));
-                            nl_buffer_format(ctx->buf, "a%zu;\n", ctx->a + pos);
+            pos = 0;
+            FOR_USERS(u, target) {
+                if (USERN(u)->type == TB_PHI) {
+                    if (USERN(u)->inputs[phi_i] != NULL) {
+                        if (USERN(u)->inputs[phi_i]->dt.type != TB_TAG_CONTROL && USERN(u)->inputs[phi_i]->dt.type != TB_TAG_MEMORY) {
+                            assert(phi_i >= 0);
+                            if (pos == 0) {
+                                c_fmt_output(ctx, USERN(u));
+                                c_fmt_ref_to_node(ctx, USERN(u)->inputs[phi_i]);
+                                nl_buffer_format(ctx->buf, ";\n");
+                            } else {
+                                c_fmt_output(ctx, USERN(u));
+                                nl_buffer_format(ctx->buf, "a%zu;\n", ctx->a + pos);
+                            }
+                            pos += 1;
                         }
-                        pos += 1;
                     }
                 }
             }
+            ctx->depth -= 1;
+            c_fmt_spaces(ctx);
+            nl_buffer_format(ctx->buf, "}\n");
         }
-        ctx->depth -= 1;
-        c_fmt_spaces(ctx);
-        nl_buffer_format(ctx->buf, "}\n");
     }
 
     c_fmt_spaces(ctx);
