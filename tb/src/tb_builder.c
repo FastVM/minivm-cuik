@@ -1070,7 +1070,7 @@ TB_Node* tb_inst_branch(TB_Function* f, TB_DataType dt, TB_Node* key, TB_Node* d
         TB_Node* cproj = tb_alloc_node(f, TB_BRANCH_PROJ, TB_TYPE_CONTROL, 1, sizeof(TB_NodeBranchProj));
         set_input(f, cproj, n, 0);
         if (i > 0) {
-            TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 10, .key = entries[i].key);
+            TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 10, .key = entries[i - 1].key);
         } else {
             TB_NODE_SET_EXTRA(cproj, TB_NodeBranchProj, .index = i, .taken = 10, .key = 0);
         }
