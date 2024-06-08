@@ -121,6 +121,8 @@ TB_Module* tb_module_create_for_host(bool is_jit) {
     TB_System sys = TB_SYSTEM_MACOS;
     #elif defined(TB_HOST_LINUX)
     TB_System sys = TB_SYSTEM_LINUX;
+    #elif defined(TB_HOST_FREEBSD)
+    TB_System sys = TB_SYSTEM_FREEBSD;
     #elif defined(EMSCRIPTEN)
     TB_System sys = TB_SYSTEM_WASM;
     #else

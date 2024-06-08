@@ -89,6 +89,7 @@ typedef enum TB_System {
     TB_SYSTEM_MACOS,
     TB_SYSTEM_ANDROID, // Not supported yet
     TB_SYSTEM_WASM,
+    TB_SYSTEM_FREEBSD,
 
     TB_SYSTEM_MAX,
 } TB_System;

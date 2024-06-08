@@ -25,6 +25,7 @@ TB_API TB_ExportBuffer tb_module_object_export(TB_Module* m, TB_Arena* dst_arena
         [TB_SYSTEM_WINDOWS] = tb_coff_write_output,
         [TB_SYSTEM_MACOS]   = tb_macho_write_output,
         [TB_SYSTEM_LINUX]   = tb_elf64obj_write_output,
+        [TB_SYSTEM_FREEBSD]   = tb_elf64obj_write_output,
         [TB_SYSTEM_WASM]    = tb_wasm_write_output,
     };
 

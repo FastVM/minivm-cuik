@@ -16,4 +16,6 @@
 #define TB_HOST_LINUX 2
 #elif defined(_WIN32)
 #define TB_HOST_WINDOWS 3
+#elif defined(__FreeBSD__)
+#define TB_HOST_FREEBSD 4
 #endif

@@ -57,6 +57,10 @@ static uint64_t get_rdtsc_freq(void) {
 
     return tsc_freq;
 }
+#elif defined(__FreeBSD__)
+static uint64_t get_rdtsc_freq(void) {
+    return 1;
+}
 #else
 #include <sys/mman.h>
 #include <linux/perf_event.h>

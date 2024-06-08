@@ -51,6 +51,7 @@ TB_API TB_ExecutableType tb_system_executable_format(TB_System s) {
     switch (s) {
         case TB_SYSTEM_WINDOWS: return TB_EXECUTABLE_PE;
         case TB_SYSTEM_LINUX:   return TB_EXECUTABLE_ELF;
+        case TB_SYSTEM_FREEBSD: return TB_EXECUTABLE_ELF;
         default: tb_todo();     return TB_EXECUTABLE_UNKNOWN;
     }
 }

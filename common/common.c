@@ -255,11 +255,13 @@ size_t tb_arena_current_size(TB_Arena* arena) {
 ////////////////////////////////
 // Futex functions
 ////////////////////////////////
+#if !defined(__FreeBSD__)
 void futex_dec(Futex* f) {
     if (atomic_fetch_sub(f, 1) == 1) {
         futex_signal(f);
     }
 }
+#endif
 
 #ifdef __linux__
 #include <errno.h>
